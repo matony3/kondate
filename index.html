@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>週末作り置き献立</title>
+  <meta name="description" content="週末にまとめて作る平日の夕食献立と買い物リストを、Gemini と一緒に考えるアプリ">
+  <meta name="theme-color" content="#e0703a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="作り置き献立">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-h">
+    <span class="logo">🍱</span>
+    <h1>週末作り置き献立</h1>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabs" id="tabs" aria-label="メニュー">
+    <button data-action="tab" data-tab="plan"><span>🗓️</span>献立</button>
+    <button data-action="tab" data-tab="shop"><span>🛒</span>買い物</button>
+    <button data-action="tab" data-tab="pantry"><span>📦</span>在庫</button>
+    <button data-action="tab" data-tab="recipes"><span>📚</span>レシピ帳</button>
+    <button data-action="tab" data-tab="settings"><span>⚙️</span>設定</button>
+  </nav>
+
+  <div id="modal"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="busy"></div>
+
+  <noscript>このアプリを使うには JavaScript を有効にしてください。</noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
