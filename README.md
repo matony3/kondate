@@ -22,7 +22,7 @@
 ### 1. 公開する（GitHub Pages・無料）
 
 1. このリポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にする
-2. `main` ブランチにマージすると自動で公開されます（`https://<ユーザー名>.github.io/memo/`）
+2. `main` ブランチにマージすると自動で公開されます（`https://matony3.github.io/kondate/`）
 3. スマホで開き、共有メニューから **「ホーム画面に追加」** するとアプリのように使えます
 
 ### 2. Gemini APIキーを設定する
