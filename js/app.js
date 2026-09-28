@@ -2,7 +2,7 @@ import { esc, uid, addDays, defaultWeekStart, md, dow, mdw, normName, fmtNum, pa
 import { loadState, saveState, migrate } from './store.js';
 import { PROTEINS, VEGETABLES, CATEGORIES, UNITS, SEASONING_PRESETS, BUILTIN_RECIPES, MEMBER_KINDS, proteinOptions, vegOptions, flavorOptions, styleOptions, findProtein, guessCategory } from './data.js';
 import {
-  dayServings, buildWeek, aggregateShopping, scaleQty, pickBuiltin, pickProteinTargets,
+  dayServings, buildWeek, aggregateShopping, scaleQty, gramHint, pickBuiltin, pickProteinTargets,
   simplePrep, recipeUsage, planRecipeIds, canFreeze, recipeFlavorKeys, recipeStyleKeys,
 } from './planner.js';
 import * as gemini from './gemini.js';
@@ -232,7 +232,7 @@ function viewShopping() {
         <span class="item-main"><span class="item-name">${esc(i.name)}</span>
           <span class="item-sub">${i.partial ? `必要 ${esc(i.needText)} − 在庫 ${esc(i.haveText)}` : ''}${i.pantryNote ? ` 在庫: ${esc(i.pantryNote)}（要確認）` : ''}</span>
           <span class="item-src">${esc(i.sources.join('・'))}</span></span>
-        <span class="item-qty">${esc(i.buyText)}</span></label></li>`;
+        <span class="item-qty">${esc(i.buyText)}${i.buyGramText ? `<small>${esc(i.buyGramText)}</small>` : ''}</span></label></li>`;
 
   return `${weekNav()}
     <div class="card progress-card">
@@ -456,8 +456,13 @@ function recipeModal(m) {
       <div class="sec-h"><h3>材料</h3>
         <div class="stepper"><button class="icon-btn small" data-action="servings" data-d="-0.5" aria-label="減らす">−</button><b>${fmtNum(m.servings)}人分</b><button class="icon-btn small" data-action="servings" data-d="0.5" aria-label="増やす">＋</button></div></div>
       ${who ? `<p class="muted small">この日食べる人: ${esc(who)}</p>` : ''}
-      <ul class="ing">${(r.ingredients || []).map((i) => `<li><span>${esc(i.name)}</span><span>${esc(scaleQty(i.amount, i.unit, f))}</span></li>`).join('')}</ul>
+      <ul class="ing">${(r.ingredients || []).map((i) => {
+        const g = gramHint(i, f);
+        return `<li><span class="ing-name">${esc(i.name)}${i.prep ? `<small>${esc(i.prep)}</small>` : ''}</span><span class="ing-qty">${esc(scaleQty(i.amount, i.unit, f))}${g ? `<small>${esc(g)}</small>` : ''}</span></li>`;
+      }).join('')}</ul>
     </section>
+    ${hasKey() ? `<div class="detail-cta"><button class="btn small" data-action="recipe-detail" data-id="${r.id}">✨ ${r.detailed ? 'もう一度詳しく書き直す' : '分量と作り方を詳しくする（AI）'}</button>
+      <span class="muted small">野菜の重さ・切り方・火加減や時間を具体的にします</span></div>` : ''}
     <section><h3>作り方</h3><ol class="steps">${(r.steps || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ol></section>
     <section class="box storage-box"><h3>保存と温め直し</h3>
       <p>🧊 冷蔵 ${st.fridgeDays || '-'}日 ／ ❄️ 冷凍 ${st.freezerDays ? `${st.freezerDays}日` : '不可'}</p>
@@ -524,7 +529,11 @@ function fromAI(src, type, target) {
       ? target ? { kind: target.kind, key: target.key, label: target.label } : { kind: ['meat', 'fish'].includes(src.proteinKind) ? src.proteinKind : 'other', label: src.proteinLabel || '' }
       : { kind: 'other', label: '' },
     ingredients: (src.ingredients || [])
-      .map((i) => ({ name: String(i.name || '').trim(), amount: Number(i.amount) || 0, unit: String(i.unit || '').trim(), category: CATEGORIES.includes(i.category) ? i.category : guessCategory(i.name) }))
+      .map((i) => ({
+        name: String(i.name || '').trim(), amount: Number(i.amount) || 0, unit: String(i.unit || '').trim(),
+        grams: Number(i.grams) > 0 ? Number(i.grams) : 0, prep: String(i.prep || '').trim(),
+        category: CATEGORIES.includes(i.category) ? i.category : guessCategory(i.name),
+      }))
       .filter((i) => i.name && !/^水$/.test(i.name)),
     steps: (src.steps || []).map(String),
     storage: { method: src.storageMethod || '冷蔵', fridgeDays: Number(src.fridgeDays) || 3, freezerDays: Number(src.freezerDays) || 0, reheat: src.reheat || '' },
@@ -924,6 +933,31 @@ const actions = {
       setBusy('');
       commit();
       openRecipe(r.id);
+    } catch (err) {
+      setBusy('');
+      toast(err.message, 'error');
+    }
+  },
+  'recipe-detail': async (el) => {
+    const r = getRecipe(el.dataset.id);
+    if (!r) return;
+    setBusy(`「${r.name}」の作り方を詳しくしています…`);
+    try {
+      const src = await gemini.generateJSON({
+        apiKey: S.settings.apiKey.trim(), model: S.settings.model, schema: P.SINGLE_SCHEMA,
+        prompt: P.detailPrompt({ settings: S.settings, members: S.members, prefs: S.prefs, pantry: S.pantry, recipe: r }),
+      });
+      const n = fromAI(src, r.type, null);
+      if (!n.ingredients.length || !n.steps.length) throw new Error('Gemini から材料・手順が返ってきませんでした。もう一度お試しください');
+      // 名前・主食材・お気に入りなどの設定はそのまま、中身だけ入れ替える
+      Object.assign(r, {
+        ingredients: n.ingredients, steps: n.steps, time: n.time || r.time, storage: n.storage,
+        kidsVersion: n.kidsVersion || r.kidsVersion, point: n.point || r.point,
+        flavors: n.flavors, sideStyle: n.sideStyle || r.sideStyle || '', servings: 4, detailed: true,
+      });
+      setBusy('');
+      commit();
+      toast('分量と作り方を詳しくしました（買い物リストにも反映されます）');
     } catch (err) {
       setBusy('');
       toast(err.message, 'error');

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
-import { weekPrompt } from '../js/prompts.js';
+import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, gramHint, ingGrams, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
+import { weekPrompt, detailPrompt } from '../js/prompts.js';
 import { namesMatch, defaultWeekStart, normName } from '../js/util.js';
 import { BUILTIN_RECIPES, proteinOptions, guessCategory } from '../js/data.js';
 
@@ -204,4 +204,29 @@ test('プロンプトに野菜・味付けの好みが入る', () => {
   assert.match(text, /好きな味付け: 味噌/);
   assert.match(text, /使わない味付け: ピリ辛/);
   assert.match(text, /好きな副菜のタイプ: サラダ/);
+});
+
+test('個数で書かれた材料の重さの目安', () => {
+  assert.equal(gramHint({ name: '玉ねぎ', amount: 1, unit: '個' }), '約200g');
+  assert.equal(gramHint({ name: 'かぼちゃ', amount: 0.25, unit: '個', grams: 300 }, 0.5), '約150g'); // AI の grams を優先
+  assert.equal(gramHint({ name: 'ミニトマト', amount: 10, unit: '個' }), '約150g'); // 「トマト」より長い一致を優先
+  assert.equal(gramHint({ name: '豚こま切れ肉', amount: 300, unit: 'g' }), '');
+  assert.equal(gramHint({ name: '醤油', amount: 2, unit: '大さじ' }), '');
+  assert.equal(ingGrams({ name: '謎の野菜', amount: 1, unit: '個' }), 0);
+});
+
+test('買い物リストに購入個数の重さの目安が出る', () => {
+  const r = recipe('r1', [{ name: '玉ねぎ', amount: 1.5, unit: '個', category: '野菜' }]);
+  const all = members.map((m) => ({ ...m, portion: 1 }));
+  const { toBuy } = aggregateShopping({ days: [{ mainId: 'r1', sideIds: [], absent: [] }] }, { r1: r }, all, []);
+  assert.equal(toBuy[0].buyText, '2個');
+  assert.equal(toBuy[0].buyGramText, '約400g');
+});
+
+test('詳しく書き直すプロンプトは料理名と元の材料を含む', () => {
+  const text = detailPrompt({ settings: {}, members, prefs: {}, pantry: [], recipe: byName('肉じゃが') });
+  assert.match(text, /「肉じゃが」のまま/);
+  assert.match(text, /じゃがいも 4個/);
+  assert.match(text, /grams に重さの目安/);
+  assert.match(text, /火加減/);
 });

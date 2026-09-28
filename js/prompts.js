@@ -9,9 +9,11 @@ const INGREDIENT = {
     name: { type: 'STRING', description: '材料名' },
     amount: { type: 'NUMBER', description: '数量。少々・適量のときは0' },
     unit: { type: 'STRING', description: 'g, ml, 個, 本, 枚, 切れ, 尾, 束, 株, 玉, パック, 袋, 缶, かけ, 大さじ, 小さじ, 少々, 適量 のいずれか' },
+    grams: { type: 'NUMBER', description: 'unit が 個・本・束・株・枚・切れ・尾・パック・袋 などのとき、その量のおおよその重さ(g)。g・ml・大さじ・小さじ・少々・適量なら0' },
+    prep: { type: 'STRING', description: '切り方・下ごしらえ（例：1cm幅の半月切り、筋を取ってそぎ切り）。不要なら空文字' },
     category: { type: 'STRING', enum: CATEGORIES },
   },
-  required: ['name', 'amount', 'unit', 'category'],
+  required: ['name', 'amount', 'unit', 'grams', 'prep', 'category'],
 };
 
 const RECIPE = {
@@ -124,8 +126,16 @@ const RULES = `# 共通ルール
 - 主菜同士・副菜同士で味付け（醤油味・味噌味・洋風・中華・甘酢など）と調理法が偏らないようにする
 - 市販の一般的な食材・調味料だけを使う
 - 材料の unit は g, ml, 個, 本, 枚, 切れ, 尾, 束, 株, 玉, パック, 袋, 缶, かけ, 大さじ, 小さじ, 少々, 適量 のいずれか。肉・ひき肉は g、魚は 切れ か 尾 で書く
-- 水は材料に含めない（手順に書く）
-- steps は3〜7手順で、各手順は簡潔に
+- 野菜・きのこ・魚など個数で数える材料は、grams に重さの目安を必ず入れる（例：玉ねぎ 1個 → grams 200、ほうれん草 1束 → grams 200、かぼちゃ 1/4個 → amount 0.25・grams 300）。「適量」は油や塩など本当に量が決まらないものだけに使う
+- 材料ごとに prep に切り方・下ごしらえを具体的に書く（大きさ・厚さ・形。例：「皮をむいて3cm角」「5mm幅の細切り」「筋を取り斜めに3等分」）
+- 水は材料に含めない（手順に分量付きで書く。例：水200ml）
+- steps は料理に慣れていない人でも迷わないように6〜10手順で具体的に書く。各手順に次を含める：
+  ・切り方の大きさや下ごしらえ（材料欄と一致させる）
+  ・火加減（弱火／中火／強火）と加熱時間の目安（例：中火で3〜4分）
+  ・できあがりの目安（例：焼き色がつくまで、竹串がすっと通るまで、汁気が半分になるまで）
+  ・調味料を入れるタイミングと量（例：醤油大さじ2・みりん大さじ2を加える）
+  ・電子レンジは W数と時間（例：600Wで3分）
+  ・最後の手順は保存容器への詰め方・冷まし方
 - 料理名は具体的に（例:「鶏むね肉のねぎ塩焼き」）`;
 
 function storageText(i, storage) {
@@ -165,6 +175,21 @@ export function namedRecipePrompt({ settings, members, prefs, pantry, name, type
 
 # 依頼
 「${name}」の${type === 'main' ? '主菜' : '副菜'}レシピを1つ、作り置き向けに書いてください。slot は 0。
+
+${RULES}`;
+}
+
+// 既存のレシピを、同じ料理のまま材料の重さ・切り方・手順を詳しく書き直す
+export function detailPrompt({ settings, members, prefs, pantry, recipe }) {
+  const ing = (recipe.ingredients || []).map((i) => `${i.name} ${i.amount > 0 ? i.amount : ''}${i.unit}`).join('、');
+  return `${commonContext({ settings, members, prefs, pantry })}
+
+# 依頼
+次の${recipe.type === 'main' ? '主菜' : '副菜'}レシピを、同じ料理のまま、より具体的で詳しいレシピに書き直してください。slot は 0。
+料理名は「${recipe.name}」のまま変えない。味付けの方向性と主な材料は元のレシピを尊重する。
+
+- 元の材料（大人4人分）: ${ing}
+- 元の手順: ${(recipe.steps || []).join(' → ')}
 
 ${RULES}`;
 }

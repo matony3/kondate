@@ -1,5 +1,5 @@
 // オフラインでも開けるようにアプリ本体をキャッシュする（オンライン時は常に最新を取得）
-const CACHE = 'kondate-v3';
+const CACHE = 'kondate-v4';
 const ASSETS = [
   './', './index.html', './css/style.css', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png',
   './js/app.js', './js/util.js', './js/data.js', './js/planner.js', './js/prompts.js', './js/gemini.js', './js/store.js',

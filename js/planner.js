@@ -1,6 +1,6 @@
 // 献立の組み立て・分量計算・買い物リスト集計（DOM に依存しない純粋ロジック）
 import { addDays, normName, namesMatch, fmtNum, shuffle } from './util.js';
-import { proteinOptions, vegOptions, flavorOptions, styleOptions, BUILTIN_RECIPES, CATEGORIES } from './data.js';
+import { proteinOptions, vegOptions, flavorOptions, styleOptions, approxGramsPerUnit, BUILTIN_RECIPES, CATEGORIES } from './data.js';
 
 // ---------- 人数・分量 ----------
 
@@ -60,6 +60,21 @@ export function scaleQty(amount, unit, factor) {
   return formatBase(v, u);
 }
 
+// 個・本・束などで書かれた材料のおおよその重さ(g)。AI の grams を優先し、なければ目安表から
+export function ingGrams(ing) {
+  if (isVague(ing.unit, ing.amount)) return 0;
+  const base = toBase(1, ing.unit).unit;
+  if (WEIGHT_UNITS.has(base) || base === '小さじ') return 0;
+  if (Number(ing.grams) > 0) return Number(ing.grams);
+  const per = approxGramsPerUnit(ing.name, String(ing.unit).trim());
+  return per ? per * Number(ing.amount) : 0;
+}
+
+export function gramHint(ing, factor = 1) {
+  const g = ingGrams(ing) * factor;
+  return g > 0 ? `約${formatBase(g, 'g')}` : '';
+}
+
 export function formatAmounts(amounts, opts) {
   return Object.entries(amounts)
     .filter(([, a]) => a > 1e-6)
@@ -83,7 +98,7 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
         if (!key) continue;
         let e = map.get(key);
         if (!e) {
-          e = { key, name: ing.name, category: CATEGORIES.includes(ing.category) ? ing.category : 'その他', amounts: {}, vague: false, sources: new Set() };
+          e = { key, name: ing.name, category: CATEGORIES.includes(ing.category) ? ing.category : 'その他', amounts: {}, grams: {}, vague: false, sources: new Set() };
           map.set(key, e);
         }
         e.sources.add(r.name);
@@ -93,6 +108,8 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
         }
         const b = toBase(Number(ing.amount) * f, ing.unit);
         e.amounts[b.unit] = (e.amounts[b.unit] || 0) + b.amount;
+        const g = ingGrams(ing) * f;
+        if (g > 0) e.grams[b.unit] = (e.grams[b.unit] || 0) + g;
       }
     }
   }
@@ -116,6 +133,11 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
       if (rest > 1e-6) buy[u] = rest;
     }
     const hasAmounts = Object.keys(e.amounts).length > 0;
+    // 買う個数（切り上げ後）に対するおおよその重さ
+    const buyGrams = Object.entries(buy).reduce((sum, [u, a]) => {
+      const per = e.grams[u] ? e.grams[u] / e.amounts[u] : 0;
+      return sum + per * Math.ceil(a - 1e-6);
+    }, 0);
     let covered;
     if (staple) covered = true;
     else if (hasAmounts) covered = Object.keys(buy).length === 0;
@@ -130,6 +152,7 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
       needText: hasAmounts ? formatAmounts(e.amounts) + (e.vague ? ' + 適量' : '') : '適量',
       haveText: formatAmounts(have),
       buyText: Object.keys(buy).length ? formatAmounts(buy, { shopping: true }) : hasAmounts ? '' : '適量',
+      buyGramText: buyGrams > 0 ? `約${formatBase(buyGrams, 'g')}` : '',
       partial: Object.keys(have).length > 0 && !covered,
       pantryNote: other.map((p) => `${p.name}${isVague(p.unit, p.amount) ? '' : ' ' + fmtNum(p.amount) + p.unit}`).join('、'),
       sources: [...e.sources],
