@@ -1,6 +1,6 @@
 // 献立の組み立て・分量計算・買い物リスト集計（DOM に依存しない純粋ロジック）
 import { addDays, normName, namesMatch, fmtNum, shuffle } from './util.js';
-import { proteinOptions, BUILTIN_RECIPES, CATEGORIES } from './data.js';
+import { proteinOptions, vegOptions, flavorOptions, styleOptions, approxGramsPerUnit, BUILTIN_RECIPES, CATEGORIES } from './data.js';
 
 // ---------- 人数・分量 ----------
 
@@ -60,6 +60,21 @@ export function scaleQty(amount, unit, factor) {
   return formatBase(v, u);
 }
 
+// 個・本・束などで書かれた材料のおおよその重さ(g)。AI の grams を優先し、なければ目安表から
+export function ingGrams(ing) {
+  if (isVague(ing.unit, ing.amount)) return 0;
+  const base = toBase(1, ing.unit).unit;
+  if (WEIGHT_UNITS.has(base) || base === '小さじ') return 0;
+  if (Number(ing.grams) > 0) return Number(ing.grams);
+  const per = approxGramsPerUnit(ing.name, String(ing.unit).trim());
+  return per ? per * Number(ing.amount) : 0;
+}
+
+export function gramHint(ing, factor = 1) {
+  const g = ingGrams(ing) * factor;
+  return g > 0 ? `約${formatBase(g, 'g')}` : '';
+}
+
 export function formatAmounts(amounts, opts) {
   return Object.entries(amounts)
     .filter(([, a]) => a > 1e-6)
@@ -83,7 +98,7 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
         if (!key) continue;
         let e = map.get(key);
         if (!e) {
-          e = { key, name: ing.name, category: CATEGORIES.includes(ing.category) ? ing.category : 'その他', amounts: {}, vague: false, sources: new Set() };
+          e = { key, name: ing.name, category: CATEGORIES.includes(ing.category) ? ing.category : 'その他', amounts: {}, grams: {}, vague: false, sources: new Set() };
           map.set(key, e);
         }
         e.sources.add(r.name);
@@ -93,6 +108,8 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
         }
         const b = toBase(Number(ing.amount) * f, ing.unit);
         e.amounts[b.unit] = (e.amounts[b.unit] || 0) + b.amount;
+        const g = ingGrams(ing) * f;
+        if (g > 0) e.grams[b.unit] = (e.grams[b.unit] || 0) + g;
       }
     }
   }
@@ -116,6 +133,11 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
       if (rest > 1e-6) buy[u] = rest;
     }
     const hasAmounts = Object.keys(e.amounts).length > 0;
+    // 買う個数（切り上げ後）に対するおおよその重さ
+    const buyGrams = Object.entries(buy).reduce((sum, [u, a]) => {
+      const per = e.grams[u] ? e.grams[u] / e.amounts[u] : 0;
+      return sum + per * Math.ceil(a - 1e-6);
+    }, 0);
     let covered;
     if (staple) covered = true;
     else if (hasAmounts) covered = Object.keys(buy).length === 0;
@@ -130,6 +152,7 @@ export function aggregateShopping(plan, recipeMap, members, pantry = []) {
       needText: hasAmounts ? formatAmounts(e.amounts) + (e.vague ? ' + 適量' : '') : '適量',
       haveText: formatAmounts(have),
       buyText: Object.keys(buy).length ? formatAmounts(buy, { shopping: true }) : hasAmounts ? '' : '適量',
+      buyGramText: buyGrams > 0 ? `約${formatBase(buyGrams, 'g')}` : '',
       partial: Object.keys(have).length > 0 && !covered,
       pantryNote: other.map((p) => `${p.name}${isVague(p.unit, p.amount) ? '' : ' ' + fmtNum(p.amount) + p.unit}`).join('、'),
       sources: [...e.sources],
@@ -200,8 +223,47 @@ export function canFreeze(r) {
   return /冷凍/.test(r?.storage?.method || '');
 }
 
+// レシピに含まれる野菜（設定画面の野菜リストに載っているもの）
+export function recipeVegKeys(r) {
+  const names = (r?.ingredients || []).map((i) => normName(i.name));
+  return vegOptions().filter((v) => names.some((n) => n.includes(normName(v.name)))).map((v) => v.key);
+}
+
+// レシピの味付け。AI が付けたものがあればそれを使い、なければ材料と料理名から推定する
+export function recipeFlavorKeys(r) {
+  const opts = flavorOptions();
+  if (Array.isArray(r?.flavors) && r.flavors.length) {
+    return opts.filter((f) => r.flavors.includes(f.name)).map((f) => f.key);
+  }
+  const names = (r?.ingredients || []).map((i) => normName(i.name));
+  const title = normName(r?.name);
+  return opts
+    .filter((f) => f.kw.some((k) => names.some((n) => n.includes(k))) || f.nameKw.some((k) => title.includes(k)))
+    .map((f) => f.key);
+}
+
+// 副菜の調理スタイル（AI が付けたものを優先し、なければ料理名から推定）
+export function recipeStyleKeys(r) {
+  if (r?.type !== 'side') return [];
+  const opts = styleOptions();
+  if (r.sideStyle) return opts.filter((o) => o.name === r.sideStyle).map((o) => o.key);
+  const title = normName(r.name);
+  const hit = opts.find((o) => o.nameKw.some((k) => title.includes(k)));
+  return hit ? [hit.key] : [];
+}
+
+function prefKeys(r) {
+  return [r?.protein?.key, ...recipeVegKeys(r), ...recipeFlavorKeys(r), ...recipeStyleKeys(r)].filter(Boolean);
+}
+
+// 主食材・野菜・味付けのどれかが 👎 なら除外
 export function isDisliked(r, prefs = {}) {
-  return !!(r?.protein?.key && prefs[r.protein.key] === 'dislike');
+  return prefKeys(r).some((k) => prefs[k] === 'dislike');
+}
+
+// 👍 の数（再利用や内蔵レシピを選ぶときの優先度）
+export function likeCount(r, prefs = {}) {
+  return prefKeys(r).filter((k) => prefs[k] === 'like').length;
 }
 
 export function planRecipeIds(plan) {
@@ -230,19 +292,28 @@ function takeSlot(free, recipe) {
   return free.splice(i, 1)[0];
 }
 
-export function buildWeek({ weekStart, settings = {}, members = [], recipes = [], prefs = {}, pantry = [], plans = {}, rng = Math.random, numDays = 5 }) {
+// 月曜からの日数（0=月〜6=日）ごとの保存方法。土日は作り置きではなく冷蔵（当日〜翌日）扱い
+export function storageFor(offset, fridgeDays = 3) {
+  if (offset >= 5) return '冷蔵';
+  return offset < fridgeDays ? '冷蔵' : '冷凍';
+}
+
+// 指定した曜日（offsets: 月曜からの日数）の献立を組み立てる。keep は作り直さずに残す日（重複回避に使う）
+export function buildWeek({ weekStart, settings = {}, members = [], recipes = [], prefs = {}, pantry = [], plans = {}, rng = Math.random, offsets = [0, 1, 2, 3, 4], keep = [] }) {
   const sidesPerDay = Math.max(0, Math.min(3, Number(settings.sidesPerDay ?? 1)));
   const fridgeDays = Number(settings.fridgeDays ?? 3);
   const defaultAbsent = members.filter((m) => m.default === false).map((m) => m.id);
-  const days = Array.from({ length: numDays }, (_, i) => ({
-    date: addDays(weekStart, i),
+  const days = [...offsets].sort((a, b) => a - b).map((off) => ({
+    date: addDays(weekStart, off),
     mainId: null,
     sideIds: Array(sidesPerDay).fill(null),
     absent: [...defaultAbsent],
-    storage: i < fridgeDays ? '冷蔵' : '冷凍',
+    storage: storageFor(off, fridgeDays),
   }));
   const prevIds = new Set(planRecipeIds(plans[addDays(weekStart, -7)]));
-  const pool = recipes.filter((r) => !r.excluded && !isDisliked(r, prefs));
+  const keptIds = new Set(planRecipeIds({ days: keep }));
+  const keptMains = keep.map((d) => recipes.find((r) => r.id === d.mainId)).filter(Boolean);
+  const pool = recipes.filter((r) => !r.excluded && !keptIds.has(r.id) && !isDisliked(r, prefs));
   const ratio = REUSE_RATIO[settings.mode] ?? REUSE_RATIO.balance;
 
   const fill = (type) => {
@@ -271,7 +342,7 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
       const scored = cands
         .filter((r) => !r.weekly)
         .filter((r) => settings.mode === 'reuse' || !prevIds.has(r.id))
-        .map((r) => ({ r, s: (r.favorite ? 2 : 0) - (prevIds.has(r.id) ? 3 : 0) + rng() }))
+        .map((r) => ({ r, s: (r.favorite ? 2 : 0) + likeCount(r, prefs) * 0.5 - (prevIds.has(r.id) ? 3 : 0) + rng() }))
         .sort((a, b) => b.s - a.s)
         .slice(0, k);
       for (const { r } of scored) {
@@ -288,12 +359,16 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
   const sides = fill('side');
 
   // 3) 残りの主菜枠に主食材（肉・魚）を割り当てて新しいレシピを依頼する
-  const fishUsed = mains.placed.filter((r) => r.protein?.kind === 'fish').length;
+  // 魚の回数は「週◯回」を日数で按分（端数は確率で決める）。残す日の魚も数に含める
+  const isFish = (r) => r.protein?.kind === 'fish';
+  const expectedFish = ((Number(settings.fishPerWeek) || 0) * (days.length + keptMains.length)) / 5;
+  const needFish = expectedFish - keptMains.filter(isFish).length - mains.placed.filter(isFish).length;
+  const fishCount = Math.max(0, Math.floor(needFish) + (rng() < needFish - Math.floor(needFish) ? 1 : 0));
   const targets = pickProteinTargets({
     count: mains.free.length,
-    fishCount: Math.max(0, (Number(settings.fishPerWeek) || 0) - fishUsed),
+    fishCount,
     prefs, pantry, rng,
-    exclude: mains.placed.map((r) => r.protein?.key).filter(Boolean),
+    exclude: [...keptMains, ...mains.placed].map((r) => r.protein?.key).filter(Boolean),
   });
   const E = mains.free;
   const fishPos = new Set(targets.fish.map((_, k) => Math.floor(((k + 0.5) * E.length) / targets.fish.length)));
@@ -311,9 +386,25 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
 
 // ---------- 内蔵レシピからの選択（APIキーなし・エラー時） ----------
 
-export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, builtins = BUILTIN_RECIPES) {
+export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, prefs = {}, storage = '', builtins = BUILTIN_RECIPES) {
   const all = builtins.filter((b) => b.type === type);
-  const list = all.filter((b) => !usedNames.has(normName(b.name)));
+  let list = all.filter((b) => !usedNames.has(normName(b.name)));
+  const ok = list.filter((b) => !isDisliked(b, prefs));
+  if (ok.length) list = ok;
+  // 冷凍する日は冷凍できるレシピを優先
+  if (storage === '冷凍') {
+    const fz = list.filter(canFreeze);
+    if (fz.length) list = fz;
+  }
+  const weighted = (c) => {
+    const ws = c.map((b) => 1 + 2 * likeCount(b, prefs));
+    let x = rng() * ws.reduce((a, w) => a + w, 0);
+    for (let i = 0; i < c.length; i++) {
+      x -= ws[i];
+      if (x < 0) return c[i];
+    }
+    return c[c.length - 1];
+  };
   const tiers = [];
   if (type === 'main' && target) {
     const t = target.key.split(':')[1];
@@ -324,7 +415,7 @@ export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.rand
   tiers.push(() => true);
   for (const tier of tiers) {
     const c = list.filter(tier);
-    if (c.length) return c[Math.floor(rng() * c.length)];
+    if (c.length) return weighted(c);
   }
   return all.length ? all[Math.floor(rng() * all.length)] : null;
 }

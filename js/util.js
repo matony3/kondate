@@ -48,6 +48,11 @@ export function dow(s) {
   return WD[parseYmd(s).getDay()];
 }
 
+// 月曜を0とした曜日の番号（0=月〜6=日）
+export function weekOffset(s) {
+  return (parseYmd(s).getDay() + 6) % 7;
+}
+
 export function mdw(s) {
   return `${md(s)}(${dow(s)})`;
 }

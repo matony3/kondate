@@ -196,7 +196,7 @@ input.num { width: 84px; flex: none; }
 /* ---------- カレンダー ---------- */
 .week-grid { display: grid; gap: 10px; }
 @media (min-width: 900px) {
-  .week-grid { grid-template-columns: repeat(5, 1fr); }
+  .week-grid { grid-template-columns: repeat(var(--cols, 5), minmax(0, 1fr)); }
 }
 .day {
   background: var(--surface);
@@ -381,3 +381,21 @@ input.num { width: 84px; flex: none; }
 @media (max-width: 380px) {
   .grid3 { grid-template-columns: 1fr 1fr; }
 }
+
+.chips.taste { margin-top: 6px; }
+.tag { font-size: .72rem; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.tag.like { background: var(--side-bg); color: var(--side); font-weight: 700; }
+.tag.dislike { background: var(--warn-bg); color: var(--warn); }
+
+.ing-name small, .ing-qty small, .item-qty small { display: block; font-size: .74rem; font-weight: 400; color: var(--muted); }
+.ing-qty, .item-qty { text-align: right; }
+.ing li { align-items: flex-start; }
+.detail-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); }
+
+.daypick { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 6px; }
+.daychip { position: relative; display: flex; flex-direction: column; align-items: center; gap: 0; padding: 6px 0; border-radius: 12px; min-height: 48px; }
+.daychip small { font-size: .68rem; color: var(--muted); }
+.daychip.weekend.off b { color: var(--muted); }
+.daychip .dot { position: absolute; top: 4px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.icon-btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
