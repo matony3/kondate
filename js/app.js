@@ -1,4 +1,4 @@
-import { esc, uid, addDays, defaultWeekStart, md, dow, mdw, normName, fmtNum, parseNum } from './util.js';
+import { esc, uid, addDays, defaultWeekStart, md, dow, mdw, weekOffset, normName, fmtNum, parseNum } from './util.js';
 import { loadState, saveState, migrate } from './store.js';
 import { PROTEINS, VEGETABLES, CATEGORIES, UNITS, SEASONING_PRESETS, BUILTIN_RECIPES, MEMBER_KINDS, proteinOptions, vegOptions, flavorOptions, styleOptions, findProtein, guessCategory } from './data.js';
 import {
@@ -19,6 +19,8 @@ const ui = {
   showCovered: false,
   extraRequest: '',
   rerollKey: '',
+  genDays: new Set([0, 1, 2, 3, 4]), // 献立を作る曜日（0=月〜6=日）
+  genOpen: false,
   models: [],
 };
 try {
@@ -90,10 +92,11 @@ function storageBadge(storage) {
   return storage === '冷凍' ? '<span class="sbadge freeze">❄️ 冷凍</span>' : '<span class="sbadge fridge">🧊 冷蔵</span>';
 }
 
-function storageWarning(r, day, i) {
+function storageWarning(r, day) {
   if (!r || !day) return '';
+  const off = weekOffset(day.date);
   if (day.storage === '冷凍' && !canFreeze(r)) return '冷凍に不向き';
-  if (day.storage === '冷蔵' && r.storage?.fridgeDays && i + 1 > r.storage.fridgeDays) return `冷蔵は${r.storage.fridgeDays}日まで`;
+  if (day.storage === '冷蔵' && off < 5 && r.storage?.fridgeDays && off + 1 > r.storage.fridgeDays) return `冷蔵は${r.storage.fridgeDays}日まで`;
   return '';
 }
 
@@ -112,7 +115,7 @@ function weekNav() {
   return `<div class="weeknav">
     <button class="icon-btn" data-action="week" data-d="-7" aria-label="前の週">‹</button>
     <div class="weeknav-mid">
-      <div class="weeknav-title">${mdw(ui.week)} 〜 ${mdw(addDays(ui.week, 4))}</div>
+      <div class="weeknav-title">${mdw(ui.week)} 〜 ${mdw(addDays(ui.week, 6))}</div>
       ${isDefault ? '<div class="muted small">今度の作り置き</div>' : '<button class="linkish small" data-action="week-today">今度の週へ戻る</button>'}
     </div>
     <button class="icon-btn" data-action="week" data-d="7" aria-label="次の週">›</button>
@@ -124,9 +127,28 @@ function genPanel(plan) {
   const mode = (v, label, sub) => `<label class="seg-opt"><input type="radio" name="mode" value="${v}" data-bind="settings.mode" ${s.mode === v ? 'checked' : ''}><span><b>${label}</b><small>${sub}</small></span></label>`;
   const sel = (bind, opts, val) => `<select data-bind="${bind}" data-type="number">${opts.map(([v, l]) => `<option value="${v}" ${Number(val) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   const weekly = S.recipes.filter((r) => r.weekly && !r.excluded).length;
-  return `<details class="card gen" ${plan ? '' : 'open'}>
+  const planned = new Set((plan?.days || []).filter((d) => d.mainId || d.sideIds.some(Boolean)).map((d) => weekOffset(d.date)));
+  const n = ui.genDays.size;
+  const redo = [...ui.genDays].filter((o) => planned.has(o)).length;
+  const dayChips = [0, 1, 2, 3, 4, 5, 6].map((o) => {
+    const date = addDays(ui.week, o);
+    return `<button class="chip daychip ${ui.genDays.has(o) ? 'on' : 'off'} ${o >= 5 ? 'weekend' : ''}" data-action="gen-day" data-off="${o}" aria-pressed="${ui.genDays.has(o)}">
+      <b>${dow(date)}</b><small>${md(date)}</small>${planned.has(o) ? '<i class="dot" title="献立あり"></i>' : ''}</button>`;
+  }).join('');
+  const label = !n ? '曜日を選んでください' : redo ? `🔄 ${n}日分を作る（${redo}日は作り直し）` : `🍳 ${n}日分の献立を作る`;
+  return `<details class="card gen" ${!plan || ui.genOpen ? 'open' : ''}>
     <summary><span>✨ ${plan ? '献立を作り直す' : '献立を提案してもらう'}</span><span class="muted small">${hasKey() ? 'Gemini' : '内蔵レシピ'}</span></summary>
     <div class="gen-body">
+      <div class="field"><div class="label">作る曜日（${n}日）</div>
+        <div class="daypick">${dayChips}</div>
+        <div class="row gap wrap small">
+          <button class="linkish" data-action="gen-days" data-set="weekdays">平日すべて</button>
+          <button class="linkish" data-action="gen-days" data-set="all">土日も含める</button>
+          ${plan ? '<button class="linkish" data-action="gen-days" data-set="empty">空いている日だけ</button>' : ''}
+          <button class="linkish" data-action="gen-days" data-set="none">選択をクリア</button>
+        </div>
+        ${planned.size ? '<p class="muted small">● は献立がある日です。選ぶとその日だけ作り直し、ほかの日はそのまま残ります。</p>' : ''}
+      </div>
       <div class="field"><div class="label">レシピの選び方</div>
         <div class="seg">${mode('new', '新しいレシピ', 'すべて新提案')}${mode('balance', 'バランス', '4割を過去から')}${mode('reuse', '定番中心', '過去・お気に入り優先')}</div>
       </div>
@@ -139,7 +161,7 @@ function genPanel(plan) {
         <textarea data-ui="extraRequest" rows="2" placeholder="例：水曜は娘の好きなハンバーグ系／野菜多めで／カレーは避けて">${esc(ui.extraRequest)}</textarea></label>
       ${weekly ? `<p class="muted small">⭐ 「毎週入れる」レシピ ${weekly}品は必ず入ります。</p>` : ''}
       ${hasKey() ? '' : '<p class="note">APIキーが未設定のため内蔵レシピから組み立てます。<button class="linkish" data-action="tab" data-tab="settings">設定でGeminiを登録</button></p>'}
-      <button class="btn primary block" data-action="generate">${plan ? '🔄 この週の献立を作り直す' : '🍳 献立を作る'}</button>
+      <button class="btn primary block" data-action="generate" ${n ? '' : 'disabled'}>${label}</button>
     </div>
   </details>`;
 }
@@ -148,7 +170,7 @@ function dishButton(r, di, slot, day) {
   if (!r) {
     return `<button class="dish empty-slot" data-action="pick-open" data-day="${di}" data-slot="${slot}">＋ ${slot === 'main' ? '主菜' : '副菜'}を選ぶ</button>`;
   }
-  const warn = storageWarning(r, day, di);
+  const warn = storageWarning(r, day);
   const kind = slot === 'main' ? r.protein?.kind || 'other' : 'side';
   return `<button class="dish ${slot === 'main' ? 'main' : 'side'} kind-${kind}" data-action="open-dish" data-day="${di}" data-slot="${slot}">
     <span class="dish-tag">${slot === 'main' ? '主菜' : '副菜'}${r.favorite ? ' ★' : ''}${r.weekly ? ' 🔁' : ''}${r.excluded ? ' 🚫' : ''}</span>
@@ -166,7 +188,10 @@ function dayCard(day, di) {
   return `<article class="day">
     <header class="day-h">
       <div class="day-date"><span class="dow">${dow(day.date)}</span><span class="md">${md(day.date)}</span></div>
-      <button class="storage-toggle" data-action="toggle-storage" data-day="${di}" title="冷蔵／冷凍を切り替え">${storageBadge(day.storage)}</button>
+      <div class="row gap">
+        <button class="storage-toggle" data-action="toggle-storage" data-day="${di}" title="冷蔵／冷凍を切り替え">${storageBadge(day.storage)}</button>
+        <button class="icon-btn small ghost" data-action="day-remove" data-day="${di}" aria-label="${dow(day.date)}曜の献立を外す" title="この日を外す">✕</button>
+      </div>
     </header>
     <div class="dishes">
       ${dishButton(main, di, 'main', day)}
@@ -205,7 +230,7 @@ function viewPlan() {
     body = `<div class="summary">
         <span>🍖 肉 ${meat}日</span><span>🐟 魚 ${fish}日</span><span>🧊 冷蔵 ${fridge}日</span><span>❄️ 冷凍 ${plan.days.length - fridge}日</span>
       </div>
-      <div class="week-grid">${plan.days.map(dayCard).join('')}</div>
+      <div class="week-grid" style="--cols:${Math.min(7, Math.max(3, plan.days.length))}">${plan.days.map(dayCard).join('')}</div>
       <p class="muted small hint">料理をタップするとレシピ・分量・別案。名前のボタンでその日に食べる人を切り替えると分量と買い物リストが変わります。</p>
       <button class="btn primary block" data-action="tab" data-tab="shop">🛒 買い物リストを見る</button>
       ${prepSection(plan)}`;
@@ -426,7 +451,7 @@ function recipeModal(m) {
   const day = ctx && plan ? plan.days[ctx.day] : null;
   const f = m.servings / (Number(r.servings) || 4);
   const eyebrow = day ? `${mdw(day.date)}・${ctx.slot === 'main' ? '主菜' : '副菜'}` : r.type === 'main' ? '主菜' : '副菜';
-  const warn = day ? storageWarning(r, day, ctx.day) : '';
+  const warn = day ? storageWarning(r, day) : '';
   const who = day ? membersEating(day).map((x) => `${x.name}${Number(x.portion) !== 1 ? `(${x.portion})` : ''}`).join('・') : '';
   const st = r.storage || {};
   const opts = proteinOptions();
@@ -567,8 +592,18 @@ function avoidNames() {
 }
 
 async function generateWeek() {
-  if (currentPlan() && !confirm('この週の献立を作り直しますか？（買い物リストのチェックもリセットされます）')) return;
-  const sk = buildWeek({ weekStart: ui.week, settings: S.settings, members: S.members, recipes: S.recipes, prefs: S.prefs, pantry: S.pantry, plans: S.plans });
+  const offsets = [...ui.genDays].sort((a, b) => a - b);
+  if (!offsets.length) { toast('献立を作る曜日を選んでください'); return; }
+  const plan = currentPlan();
+  const keep = (plan?.days || []).filter((d) => !ui.genDays.has(weekOffset(d.date)));
+  const redo = (plan?.days || []).filter((d) => ui.genDays.has(weekOffset(d.date)) && (d.mainId || d.sideIds.some(Boolean)));
+  if (redo.length && !confirm(`${redo.map((d) => dow(d.date)).join('・')}曜の献立を作り直しますか？${keep.length ? '（ほかの日はそのまま残ります）' : ''}`)) return;
+  const sk = buildWeek({ weekStart: ui.week, settings: S.settings, members: S.members, recipes: S.recipes, prefs: S.prefs, pantry: S.pantry, plans: S.plans, offsets, keep });
+  // 作り直す日は「食べる人」の設定を引き継ぐ
+  for (const d of sk.days) {
+    const old = plan?.days.find((x) => x.date === d.date);
+    if (old) d.absent = [...old.absent];
+  }
   let ai = null;
   if ((sk.mainRequests.length || sk.sideRequests.length) && hasKey()) {
     setBusy('Gemini が献立を考えています…（30秒〜1分ほど）');
@@ -582,7 +617,7 @@ async function generateWeek() {
         prompt: P.weekPrompt({
           settings: S.settings, members: S.members, prefs: S.prefs, pantry: S.pantry, days: sk.days,
           mainRequests: sk.mainRequests, sideRequests: sk.sideRequests,
-          fixedNames: [...namesInDaysRaw(sk.days)],
+          fixedNames: [...namesInDaysRaw([...keep, ...sk.days])],
           avoidNames: [...new Set([...avoidNames(), ...(S.settings.mode === 'new' ? recent : [])])],
           extraRequest: ui.extraRequest,
         }),
@@ -593,7 +628,7 @@ async function generateWeek() {
     }
   }
   const pick = (list, i) => (list || []).find((x) => x.slot === i) || null;
-  const used = namesInDays(sk.days);
+  const used = namesInDays([...keep, ...sk.days]);
   sk.mainRequests.forEach((req, i) => {
     const src = pick(ai?.mains, i) || ai?.mains?.[i];
     let id;
@@ -601,7 +636,7 @@ async function generateWeek() {
       const r = fromAI(src, 'main', req.target);
       S.recipes.push(r);
       id = r.id;
-    } else id = addBuiltin(pickBuiltin('main', req.target, used, Math.random, S.prefs));
+    } else id = addBuiltin(pickBuiltin('main', req.target, used, Math.random, S.prefs, req.storage));
     sk.days[req.day].mainId = id;
     used.add(normName(getRecipe(id)?.name));
   });
@@ -612,15 +647,17 @@ async function generateWeek() {
       const r = fromAI(src, 'side', null);
       S.recipes.push(r);
       id = r.id;
-    } else id = addBuiltin(pickBuiltin('side', null, used, Math.random, S.prefs));
+    } else id = addBuiltin(pickBuiltin('side', null, used, Math.random, S.prefs, req.storage));
     sk.days[req.day].sideIds[req.idx] = id;
     used.add(normName(getRecipe(id)?.name));
   });
-  S.plans[ui.week] = { weekStart: ui.week, days: sk.days, prep: null, createdAt: Date.now() };
-  S.checks[ui.week] = {};
+  const days = [...keep, ...sk.days].sort((a, b) => a.date.localeCompare(b.date));
+  S.plans[ui.week] = { weekStart: ui.week, days, prep: null, createdAt: plan?.createdAt || Date.now() };
+  if (!keep.length) S.checks[ui.week] = {};
+  ui.genOpen = false;
   setBusy('');
   commit();
-  toast(ai ? 'Gemini の提案で献立を作りました' : '内蔵レシピで献立を作りました');
+  toast(`${ai ? 'Gemini の提案' : '内蔵レシピ'}で${sk.days.length}日分の献立を作りました`);
 }
 
 function namesInDaysRaw(days) {
@@ -695,7 +732,7 @@ async function rerollSlot() {
   }
   if (!newId) {
     const used = new Set([...others, cur?.name].filter(Boolean).map(normName));
-    newId = addBuiltin(pickBuiltin(type, target, used, Math.random, S.prefs));
+    newId = addBuiltin(pickBuiltin(type, target, used, Math.random, S.prefs, day.storage));
     if (hasKey()) toast('内蔵レシピから選びました');
   }
   setSlot(day, ctx.slot, newId);
@@ -775,6 +812,35 @@ const actions = {
   week: (el) => { ui.week = addDays(ui.week, Number(el.dataset.d)); render(); },
   'week-today': () => { ui.week = defaultWeekStart(); render(); },
   generate: () => generateWeek(),
+  'gen-day': (el) => {
+    const o = Number(el.dataset.off);
+    if (ui.genDays.has(o)) ui.genDays.delete(o);
+    else ui.genDays.add(o);
+    ui.genOpen = true;
+    render();
+  },
+  'gen-days': (el) => {
+    const plan = currentPlan();
+    const planned = new Set((plan?.days || []).filter((d) => d.mainId || d.sideIds.some(Boolean)).map((d) => weekOffset(d.date)));
+    const sets = {
+      weekdays: [0, 1, 2, 3, 4],
+      all: [0, 1, 2, 3, 4, 5, 6],
+      empty: [0, 1, 2, 3, 4].filter((o) => !planned.has(o)),
+      none: [],
+    };
+    ui.genDays = new Set(sets[el.dataset.set] || []);
+    ui.genOpen = true;
+    render();
+  },
+  'day-remove': (el) => {
+    const plan = currentPlan();
+    const d = plan.days[Number(el.dataset.day)];
+    if (!confirm(`${mdw(d.date)} の献立を外しますか？`)) return;
+    plan.days = plan.days.filter((x) => x !== d);
+    plan.prep = null;
+    if (!plan.days.length) delete S.plans[ui.week];
+    commit();
+  },
   'toggle-storage': (el) => {
     const d = currentPlan().days[Number(el.dataset.day)];
     d.storage = d.storage === '冷凍' ? '冷蔵' : '冷凍';
@@ -1126,6 +1192,11 @@ document.addEventListener('input', (e) => {
     ui[t.dataset.ui] = t.value;
   }
 });
+
+// 生成パネルの開閉状態を覚えておく（再描画で閉じないように）
+document.addEventListener('toggle', (e) => {
+  if (e.target.classList?.contains('gen')) ui.genOpen = e.target.open;
+}, true);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && ui.modal) { ui.modal = null; render(); }

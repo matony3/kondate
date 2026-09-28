@@ -1,6 +1,6 @@
 // Gemini に渡すプロンプトと応答スキーマ
 import { CATEGORIES, MEMBER_KINDS, FLAVORS, SIDE_STYLES, proteinOptions, vegOptions, flavorOptions, styleOptions } from './data.js';
-import { mdw } from './util.js';
+import { mdw, parseYmd } from './util.js';
 import { dayServings } from './planner.js';
 
 const INGREDIENT = {
@@ -138,7 +138,10 @@ const RULES = `# 共通ルール
   ・最後の手順は保存容器への詰め方・冷まし方
 - 料理名は具体的に（例:「鶏むね肉のねぎ塩焼き」）`;
 
-function storageText(i, storage) {
+// date: 食べる日。月曜からの日数で「調理後◯日目」を決める（日曜にまとめて調理する前提）
+function storageText(date, storage) {
+  const i = (parseYmd(date).getDay() + 6) % 7;
+  if (i >= 5) return '冷蔵（週末の分。当日か前日に作って食べる）';
   return storage === '冷凍'
     ? `冷凍保存（調理後${i + 1}日目に解凍して食べる）`
     : `冷蔵保存（調理後${i + 1}日目に食べる）`;
@@ -157,13 +160,13 @@ export function weekPrompt({ settings, members, prefs, pantry, days, mainRequest
   mainRequests.forEach((r, i) => {
     const d = days[r.day];
     const who = dayServings(members, d.absent);
-    lines.push(`- slot=${i}: ${mdw(d.date)} ／ 主食材: ${r.target ? r.target.label : 'おまかせ'} ／ ${storageText(r.day, r.storage)} ／ この日は${who}人分`);
+    lines.push(`- slot=${i}: ${mdw(d.date)} ／ 主食材: ${r.target ? r.target.label : 'おまかせ'} ／ ${storageText(d.date, r.storage)} ／ この日は${who}人分`);
   });
   lines.push(`## 副菜 sides（${sideRequests.length}品）— この順番で、slot に番号を入れて返す`);
   if (!sideRequests.length) lines.push('（なし。空配列を返す）');
   sideRequests.forEach((r, i) => {
     const d = days[r.day];
-    lines.push(`- slot=${i}: ${mdw(d.date)} ／ 野菜中心の副菜 ／ ${storageText(r.day, r.storage)}`);
+    lines.push(`- slot=${i}: ${mdw(d.date)} ／ 野菜中心の副菜 ／ ${storageText(d.date, r.storage)}`);
   });
   lines.push('\n副菜は、同じ日の主菜と味付け・色味が重ならないように選ぶ。複数の料理で同じ野菜を使い回して買い物の品数を減らす工夫をする。');
   lines.push('\n' + RULES);

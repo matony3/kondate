@@ -292,19 +292,28 @@ function takeSlot(free, recipe) {
   return free.splice(i, 1)[0];
 }
 
-export function buildWeek({ weekStart, settings = {}, members = [], recipes = [], prefs = {}, pantry = [], plans = {}, rng = Math.random, numDays = 5 }) {
+// 月曜からの日数（0=月〜6=日）ごとの保存方法。土日は作り置きではなく冷蔵（当日〜翌日）扱い
+export function storageFor(offset, fridgeDays = 3) {
+  if (offset >= 5) return '冷蔵';
+  return offset < fridgeDays ? '冷蔵' : '冷凍';
+}
+
+// 指定した曜日（offsets: 月曜からの日数）の献立を組み立てる。keep は作り直さずに残す日（重複回避に使う）
+export function buildWeek({ weekStart, settings = {}, members = [], recipes = [], prefs = {}, pantry = [], plans = {}, rng = Math.random, offsets = [0, 1, 2, 3, 4], keep = [] }) {
   const sidesPerDay = Math.max(0, Math.min(3, Number(settings.sidesPerDay ?? 1)));
   const fridgeDays = Number(settings.fridgeDays ?? 3);
   const defaultAbsent = members.filter((m) => m.default === false).map((m) => m.id);
-  const days = Array.from({ length: numDays }, (_, i) => ({
-    date: addDays(weekStart, i),
+  const days = [...offsets].sort((a, b) => a - b).map((off) => ({
+    date: addDays(weekStart, off),
     mainId: null,
     sideIds: Array(sidesPerDay).fill(null),
     absent: [...defaultAbsent],
-    storage: i < fridgeDays ? '冷蔵' : '冷凍',
+    storage: storageFor(off, fridgeDays),
   }));
   const prevIds = new Set(planRecipeIds(plans[addDays(weekStart, -7)]));
-  const pool = recipes.filter((r) => !r.excluded && !isDisliked(r, prefs));
+  const keptIds = new Set(planRecipeIds({ days: keep }));
+  const keptMains = keep.map((d) => recipes.find((r) => r.id === d.mainId)).filter(Boolean);
+  const pool = recipes.filter((r) => !r.excluded && !keptIds.has(r.id) && !isDisliked(r, prefs));
   const ratio = REUSE_RATIO[settings.mode] ?? REUSE_RATIO.balance;
 
   const fill = (type) => {
@@ -350,12 +359,16 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
   const sides = fill('side');
 
   // 3) 残りの主菜枠に主食材（肉・魚）を割り当てて新しいレシピを依頼する
-  const fishUsed = mains.placed.filter((r) => r.protein?.kind === 'fish').length;
+  // 魚の回数は「週◯回」を日数で按分（端数は確率で決める）。残す日の魚も数に含める
+  const isFish = (r) => r.protein?.kind === 'fish';
+  const expectedFish = ((Number(settings.fishPerWeek) || 0) * (days.length + keptMains.length)) / 5;
+  const needFish = expectedFish - keptMains.filter(isFish).length - mains.placed.filter(isFish).length;
+  const fishCount = Math.max(0, Math.floor(needFish) + (rng() < needFish - Math.floor(needFish) ? 1 : 0));
   const targets = pickProteinTargets({
     count: mains.free.length,
-    fishCount: Math.max(0, (Number(settings.fishPerWeek) || 0) - fishUsed),
+    fishCount,
     prefs, pantry, rng,
-    exclude: mains.placed.map((r) => r.protein?.key).filter(Boolean),
+    exclude: [...keptMains, ...mains.placed].map((r) => r.protein?.key).filter(Boolean),
   });
   const E = mains.free;
   const fishPos = new Set(targets.fish.map((_, k) => Math.floor(((k + 0.5) * E.length) / targets.fish.length)));
@@ -373,11 +386,16 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
 
 // ---------- 内蔵レシピからの選択（APIキーなし・エラー時） ----------
 
-export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, prefs = {}, builtins = BUILTIN_RECIPES) {
+export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, prefs = {}, storage = '', builtins = BUILTIN_RECIPES) {
   const all = builtins.filter((b) => b.type === type);
   let list = all.filter((b) => !usedNames.has(normName(b.name)));
   const ok = list.filter((b) => !isDisliked(b, prefs));
   if (ok.length) list = ok;
+  // 冷凍する日は冷凍できるレシピを優先
+  if (storage === '冷凍') {
+    const fz = list.filter(canFreeze);
+    if (fz.length) list = fz;
+  }
   const weighted = (c) => {
     const ws = c.map((b) => 1 + 2 * likeCount(b, prefs));
     let x = rng() * ws.reduce((a, w) => a + w, 0);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, gramHint, ingGrams, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
+import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, storageFor, gramHint, ingGrams, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
 import { weekPrompt, detailPrompt } from '../js/prompts.js';
 import { namesMatch, defaultWeekStart, normName } from '../js/util.js';
 import { BUILTIN_RECIPES, proteinOptions, guessCategory } from '../js/data.js';
@@ -229,4 +229,36 @@ test('詳しく書き直すプロンプトは料理名と元の材料を含む',
   assert.match(text, /じゃがいも 4個/);
   assert.match(text, /grams に重さの目安/);
   assert.match(text, /火加減/);
+});
+
+test('選んだ曜日だけ献立を作る（1日・3日・土日）', () => {
+  const one = buildWeek({ weekStart: '2026-09-28', settings: { sidesPerDay: 1 }, members, recipes: [], offsets: [2], rng: seeded(1) });
+  assert.deepEqual(one.days.map((d) => d.date), ['2026-09-30']);
+  assert.equal(one.mainRequests.length, 1);
+  assert.equal(one.mainRequests[0].day, 0);
+  const three = buildWeek({ weekStart: '2026-09-28', settings: { fridgeDays: 3 }, members, recipes: [], offsets: [4, 0, 3], rng: seeded(1) });
+  assert.deepEqual(three.days.map((d) => d.date), ['2026-09-28', '2026-10-01', '2026-10-02']);
+  assert.deepEqual(three.days.map((d) => d.storage), ['冷蔵', '冷凍', '冷凍']);
+  assert.equal(storageFor(5), '冷蔵'); // 土曜は作り置きしない
+  assert.equal(storageFor(6, 0), '冷蔵');
+});
+
+test('残す日のレシピは再利用せず、魚の回数も残す日を含めて按分する', () => {
+  const fish = { ...byName('サバの味噌煮'), id: 'f1', favorite: true };
+  const meat = { ...byName('鶏もも肉の照り焼き'), id: 'm1', favorite: true };
+  const keep = [{ date: '2026-09-28', mainId: 'f1', sideIds: [], absent: [] }, { date: '2026-09-29', mainId: 'f1', sideIds: [], absent: [] }];
+  for (let s = 1; s < 20; s++) {
+    const sk = buildWeek({ weekStart: '2026-09-28', settings: { mode: 'reuse', fishPerWeek: 2, sidesPerDay: 0 }, members, recipes: [fish, meat], offsets: [2, 3, 4], keep, rng: seeded(s) });
+    assert.ok(!sk.days.some((d) => d.mainId === 'f1'), '残す日の料理は重複させない');
+    assert.equal(sk.mainRequests.filter((r) => r.target.kind === 'fish').length, 0, '魚は残す日で週2回に達している');
+  }
+});
+
+test('冷凍する日は冷凍できる内蔵レシピを選ぶ', () => {
+  for (let s = 1; s < 40; s++) {
+    for (const type of ['main', 'side']) {
+      const b = pickBuiltin(type, null, new Set(), seeded(s), {}, '冷凍');
+      assert.match(b.storage.method, /冷凍/, b.name);
+    }
+  }
 });
