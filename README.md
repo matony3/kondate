@@ -29,7 +29,7 @@
 
 1. [Google AI Studio](https://aistudio.google.com/apikey) で APIキーを作成
 2. アプリの ⚙️設定 → 「APIキー」に貼り付け →「接続テスト」
-3. モデルは既定で `gemini-2.5-flash`。「モデル一覧を取得」で使えるモデルから選べます
+3. モデルは既定で `gemini-3.8-flash`（2026年9月GA）。「モデル一覧を取得」で使えるモデルから選べます
 
 > APIキーはその端末のブラウザ内（localStorage）にだけ保存され、Google の API 以外には送信されません。バックアップファイルにも含まれません。
 

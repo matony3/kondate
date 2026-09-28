@@ -335,7 +335,7 @@ function viewSettings() {
       <p class="muted small"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> で発行したAPIキーを貼り付けてください。キーはこの端末のブラウザ内だけに保存され、Google以外には送信されません。</p>
       <label class="field"><span class="label">APIキー</span><input type="password" autocomplete="off" data-bind="settings.apiKey" value="${esc(s.apiKey)}" placeholder="AIza..."></label>
       <label class="field"><span class="label">モデル</span><input list="modelList" data-bind="settings.model" value="${esc(s.model)}">
-        <datalist id="modelList">${[...new Set(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite', ...ui.models])].map((m) => `<option value="${esc(m)}">`).join('')}</datalist></label>
+        <datalist id="modelList">${[...new Set(['gemini-3.8-flash', ...ui.models])].map((m) => `<option value="${esc(m)}">`).join('')}</datalist></label>
       <div class="row gap wrap"><button class="btn" data-action="models">モデル一覧を取得</button><button class="btn" data-action="test-api">接続テスト</button></div>
       ${ui.models.length ? `<p class="muted small">利用可能: ${ui.models.map(esc).join('、')}</p>` : ''}
     </section>
@@ -685,7 +685,7 @@ async function generatePrep() {
   if (hasKey()) {
     setBusy('Gemini が段取りを考えています…');
     try {
-      const res = await gemini.generateJSON({ apiKey: S.settings.apiKey.trim(), model: S.settings.model, schema: P.PREP_SCHEMA, prompt: P.prepPrompt({ settings: S.settings, members: S.members, dishes }), temperature: 0.4 });
+      const res = await gemini.generateJSON({ apiKey: S.settings.apiKey.trim(), model: S.settings.model, schema: P.PREP_SCHEMA, prompt: P.prepPrompt({ settings: S.settings, members: S.members, dishes }) });
       prep = { ...res, source: 'ai' };
     } catch (err) {
       toast(`${err.message}（簡易版の段取りを表示します）`, 'error');
@@ -879,7 +879,7 @@ const actions = {
     if (!name) { toast('料理名を入力してください'); return; }
     setBusy(`「${name}」のレシピを作成中…`);
     try {
-      const src = await gemini.generateJSON({ apiKey: S.settings.apiKey.trim(), model: S.settings.model, schema: P.SINGLE_SCHEMA, prompt: P.namedRecipePrompt({ settings: S.settings, members: S.members, prefs: S.prefs, pantry: S.pantry, name, type }), temperature: 0.5 });
+      const src = await gemini.generateJSON({ apiKey: S.settings.apiKey.trim(), model: S.settings.model, schema: P.SINGLE_SCHEMA, prompt: P.namedRecipePrompt({ settings: S.settings, members: S.members, prefs: S.prefs, pantry: S.pantry, name, type }) });
       const r = fromAI(src, type, null);
       if (type === 'main') {
         const opt = proteinOptions().find((o) => o.kw.some((set) => set.every((w) => normName(`${src.proteinLabel || ''}${r.name}`).includes(w))));
@@ -953,7 +953,6 @@ const actions = {
         apiKey: S.settings.apiKey.trim(), model: S.settings.model,
         prompt: '「接続OK」とだけ message に入れて返してください。',
         schema: { type: 'OBJECT', properties: { message: { type: 'STRING' } }, required: ['message'] },
-        temperature: 0,
       });
       toast(`✅ ${S.settings.model}: ${res.message}`);
     } catch (err) {

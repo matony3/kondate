@@ -13,15 +13,16 @@ async function apiError(res) {
   return new Error(`Gemini API エラー ${res.status}: ${msg}${hint}`);
 }
 
-export async function generateJSON({ apiKey, model, prompt, schema, temperature = 0.9 }) {
+// 温度は指定せずモデル既定値を使う（Gemini 3 系は既定値での利用が推奨）
+export async function generateJSON({ apiKey, model, prompt, schema }) {
   if (!apiKey) throw new Error('Gemini APIキーが設定されていません');
-  const name = String(model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const name = String(model || 'gemini-3.8-flash').replace(/^models\//, '');
   const res = await fetch(`${BASE}/models/${encodeURIComponent(name)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature, responseMimeType: 'application/json', responseSchema: schema },
+      generationConfig: { responseMimeType: 'application/json', responseSchema: schema },
     }),
   });
   if (!res.ok) throw await apiError(res);

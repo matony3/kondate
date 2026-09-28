@@ -6,7 +6,7 @@ export function defaultState() {
     version: 1,
     settings: {
       apiKey: '',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       mode: 'balance', // new | balance | reuse
       fishPerWeek: 2,
       sidesPerDay: 1,
@@ -34,7 +34,7 @@ export function migrate(s) {
   return {
     ...d,
     ...s,
-    settings: { ...d.settings, ...(s.settings || {}) },
+    settings: { ...d.settings, ...(s.settings || {}), ...(/^gemini-2\./.test(s.settings?.model || '') ? { model: d.settings.model } : {}) },
     members: Array.isArray(s.members) && s.members.length ? s.members : d.members,
     prefs: s.prefs || {},
     pantry: Array.isArray(s.pantry) ? s.pantry : [],
