@@ -1,9 +1,9 @@
 import { esc, uid, addDays, defaultWeekStart, md, dow, mdw, normName, fmtNum, parseNum } from './util.js';
 import { loadState, saveState, migrate } from './store.js';
-import { PROTEINS, CATEGORIES, UNITS, SEASONING_PRESETS, BUILTIN_RECIPES, MEMBER_KINDS, proteinOptions, findProtein, guessCategory } from './data.js';
+import { PROTEINS, VEGETABLES, CATEGORIES, UNITS, SEASONING_PRESETS, BUILTIN_RECIPES, MEMBER_KINDS, proteinOptions, vegOptions, flavorOptions, styleOptions, findProtein, guessCategory } from './data.js';
 import {
   dayServings, buildWeek, aggregateShopping, scaleQty, pickBuiltin, pickProteinTargets,
-  simplePrep, recipeUsage, planRecipeIds, canFreeze,
+  simplePrep, recipeUsage, planRecipeIds, canFreeze, recipeFlavorKeys, recipeStyleKeys,
 } from './planner.js';
 import * as gemini from './gemini.js';
 import * as P from './prompts.js';
@@ -74,6 +74,16 @@ function proteinBadge(r) {
   const icon = k === 'fish' ? '🐟' : k === 'meat' ? '🍖' : '🥬';
   const label = r?.protein?.label || (r?.type === 'side' ? '副菜' : 'その他');
   return `<span class="pbadge kind-${k}">${icon} ${esc(label)}</span>`;
+}
+
+// 味付け・副菜タイプのタグ（好みに 👍／👎 が付いていれば一緒に表示）
+function tasteTags(r) {
+  const keys = [...recipeFlavorKeys(r), ...recipeStyleKeys(r)];
+  if (!keys.length) return '';
+  return `<div class="chips taste">${keys.map((k) => {
+    const v = S.prefs[k];
+    return `<span class="tag ${v || ''}">${v === 'like' ? '👍' : v === 'dislike' ? '👎' : ''}${esc(k.split(':')[1])}</span>`;
+  }).join('')}</div>`;
 }
 
 function storageBadge(storage) {
@@ -327,9 +337,15 @@ function viewSettings() {
   const prefBtn = (o) => {
     const v = S.prefs[o.key] || '';
     const icon = v === 'like' ? '👍' : v === 'dislike' ? '👎' : '';
-    return `<button class="chip pref ${v || 'neutral'}" data-action="pref" data-key="${esc(o.key)}">${icon} ${esc(o.cut)}</button>`;
+    return `<button class="chip pref ${v || 'neutral'}" data-action="pref" data-key="${esc(o.key)}">${icon} ${esc(o.cut || o.name)}</button>`;
   };
   const opts = proteinOptions();
+  const vegs = vegOptions();
+  const prefCount = (list) => {
+    const l = list.filter((o) => S.prefs[o.key] === 'like').length;
+    const d = list.filter((o) => S.prefs[o.key] === 'dislike').length;
+    return l || d ? `<span class="muted small">👍${l} 👎${d}</span>` : '';
+  };
   return `<section class="card">
       <h2>🔑 Gemini API（Google AI Studio）</h2>
       <p class="muted small"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> で発行したAPIキーを貼り付けてください。キーはこの端末のブラウザ内だけに保存され、Google以外には送信されません。</p>
@@ -358,6 +374,21 @@ function viewSettings() {
       <p class="muted small">タップで 👍好き → 👎避ける → 未設定 と切り替わります。👍は選ばれやすく、👎は提案されません。</p>
       ${PROTEINS.map((g) => `<div class="pref-group"><div class="label">${g.kind === 'fish' ? '🐟 魚' : '🍖 ' + esc(g.type)}</div>
         <div class="chips wrap">${opts.filter((o) => o.type === g.type).map(prefBtn).join('')}</div></div>`).join('')}
+    </section>
+
+    <section class="card">
+      <div class="card-h"><h2>🥬 野菜・副菜の好み</h2>${prefCount([...vegs, ...styleOptions()])}</div>
+      <p class="muted small">👍の野菜は副菜や付け合わせで多めに使い、👎の野菜は主菜・副菜とも使いません。</p>
+      <div class="pref-group"><div class="label">🍽️ 副菜のタイプ</div>
+        <div class="chips wrap">${styleOptions().map(prefBtn).join('')}</div></div>
+      ${VEGETABLES.map((g) => `<div class="pref-group"><div class="label">${esc(g.group)}</div>
+        <div class="chips wrap">${vegs.filter((o) => o.group === g.group).map(prefBtn).join('')}</div></div>`).join('')}
+    </section>
+
+    <section class="card">
+      <div class="card-h"><h2>🧂 味付けの好み</h2>${prefCount(flavorOptions())}</div>
+      <p class="muted small">👍の味付けを多めに（毎日同じにはなりません）、👎の味付けは使いません。</p>
+      <div class="chips wrap">${flavorOptions().map(prefBtn).join('')}</div>
       <label class="field"><span class="label">アレルギー・苦手な食材・その他の要望</span>
         <textarea rows="3" data-bind="settings.notes" placeholder="例：娘はきのこが苦手／えびアレルギーなし／平日は20時に食べる">${esc(s.notes)}</textarea></label>
     </section>
@@ -414,7 +445,7 @@ function recipeModal(m) {
       <button class="linkish danger" data-action="slot-clear">この枠を空にする</button>
     </section>` : '';
 
-  return `${sheetHead(eyebrow, esc(r.name), `<div class="row gap wrap">${r.type === 'main' ? proteinBadge(r) : ''}${r.time ? `<span class="muted small">⏱ ${r.time}分</span>` : ''}${day ? storageBadge(day.storage) : ''}</div>`)}
+  return `${sheetHead(eyebrow, esc(r.name), `<div class="row gap wrap">${r.type === 'main' ? proteinBadge(r) : ''}${r.time ? `<span class="muted small">⏱ ${r.time}分</span>` : ''}${day ? storageBadge(day.storage) : ''}</div>${tasteTags(r)}`)}
     <div class="flags">
       <button class="flag-btn ${r.favorite ? 'on' : ''}" data-action="recipe-flag" data-flag="favorite" data-id="${r.id}">★ お気に入り</button>
       <button class="flag-btn ${r.weekly ? 'on' : ''}" data-action="recipe-flag" data-flag="weekly" data-id="${r.id}">🔁 毎週入れる</button>
@@ -498,6 +529,8 @@ function fromAI(src, type, target) {
     steps: (src.steps || []).map(String),
     storage: { method: src.storageMethod || '冷蔵', fridgeDays: Number(src.fridgeDays) || 3, freezerDays: Number(src.freezerDays) || 0, reheat: src.reheat || '' },
     kidsVersion: src.kidsVersion || '',
+    flavors: Array.isArray(src.flavors) ? src.flavors.map(String) : [],
+    sideStyle: type === 'side' && src.sideStyle && src.sideStyle !== 'その他' ? src.sideStyle : '',
     point: src.point || '',
     source: 'ai',
     favorite: false, weekly: false, excluded: false,
@@ -559,7 +592,7 @@ async function generateWeek() {
       const r = fromAI(src, 'main', req.target);
       S.recipes.push(r);
       id = r.id;
-    } else id = addBuiltin(pickBuiltin('main', req.target, used));
+    } else id = addBuiltin(pickBuiltin('main', req.target, used, Math.random, S.prefs));
     sk.days[req.day].mainId = id;
     used.add(normName(getRecipe(id)?.name));
   });
@@ -570,7 +603,7 @@ async function generateWeek() {
       const r = fromAI(src, 'side', null);
       S.recipes.push(r);
       id = r.id;
-    } else id = addBuiltin(pickBuiltin('side', null, used));
+    } else id = addBuiltin(pickBuiltin('side', null, used, Math.random, S.prefs));
     sk.days[req.day].sideIds[req.idx] = id;
     used.add(normName(getRecipe(id)?.name));
   });
@@ -653,7 +686,7 @@ async function rerollSlot() {
   }
   if (!newId) {
     const used = new Set([...others, cur?.name].filter(Boolean).map(normName));
-    newId = addBuiltin(pickBuiltin(type, target, used));
+    newId = addBuiltin(pickBuiltin(type, target, used, Math.random, S.prefs));
     if (hasKey()) toast('内蔵レシピから選びました');
   }
   setSlot(day, ctx.slot, newId);

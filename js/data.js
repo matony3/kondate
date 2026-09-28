@@ -314,3 +314,55 @@ export const BUILTIN_RECIPES = [
     kidsVersion: '皮をむくと食べやすい。',
   }),
 ];
+
+// ---- 野菜・味付けの好み（設定画面で 👍／👎 を付ける） ----
+
+export const VEGETABLES = [
+  { group: '葉物', items: ['ほうれん草', '小松菜', 'キャベツ', '白菜', 'レタス', 'チンゲン菜', '水菜', 'ニラ'] },
+  { group: '根菜・いも', items: ['大根', 'にんじん', 'ごぼう', 'れんこん', 'じゃがいも', 'さつまいも', '里芋', '玉ねぎ'] },
+  { group: '実もの', items: ['かぼちゃ', 'なす', 'ピーマン', 'パプリカ', 'トマト', 'きゅうり', 'ズッキーニ', 'オクラ'] },
+  { group: '花・茎・その他', items: ['ブロッコリー', 'カリフラワー', 'アスパラ', 'いんげん', 'もやし', '長ねぎ', 'セロリ', 'ゴーヤ'] },
+  { group: 'きのこ', items: ['しいたけ', 'しめじ', 'えのき', 'まいたけ', 'エリンギ'] },
+  { group: '豆・海藻・乾物', items: ['豆腐', '油揚げ', '大豆', 'ひじき', 'わかめ', '切り干し大根', 'こんにゃく', '春雨'] },
+];
+
+export function vegOptions() {
+  return VEGETABLES.flatMap((g) => g.items.map((name) => ({ key: `veg:${name}`, name, group: g.group })));
+}
+
+// kw: 材料名に含まれていればその味付けとみなす（内蔵レシピや手動登録レシピの判定用）
+export const FLAVORS = [
+  { name: '醤油・和風だし', kw: ['醤油', 'めんつゆ', '顆粒だし', 'だし'] },
+  { name: '甘辛・照り焼き', kw: [], nameKw: ['照り焼き', '甘辛', 'しょうが焼き', '生姜焼き', 'きんぴら'] },
+  { name: '味噌', kw: ['味噌'] },
+  { name: '塩・塩こうじ', kw: ['塩こうじ', '塩麹'] },
+  { name: '甘酢・酢の物', kw: ['酢'] },
+  { name: 'ポン酢', kw: ['ポン酢'] },
+  { name: 'ごま', kw: ['すりごま', 'ごまだれ', '練りごま'] },
+  { name: 'マヨネーズ', kw: ['マヨネーズ'] },
+  { name: 'ケチャップ・トマト', kw: ['ケチャップ', 'トマト缶', 'カットトマト'] },
+  { name: 'ソース・洋風', kw: ['ウスターソース', 'コンソメ', 'デミグラス'] },
+  { name: 'カレー', kw: ['カレー'] },
+  { name: '中華・オイスター', kw: ['オイスターソース', '鶏がらスープ', '豆板醤', '甜麺醤'] },
+  { name: 'バター・クリーム', kw: ['バター', '生クリーム'] },
+  { name: 'にんにく・ガーリック', kw: ['にんにく'] },
+  { name: 'ピリ辛', kw: ['豆板醤', '唐辛子', 'コチュジャン', 'ラー油', '一味'] },
+];
+
+export function flavorOptions() {
+  return FLAVORS.map((f) => ({ key: `flavor:${f.name}`, name: f.name, kw: f.kw.map(normName), nameKw: (f.nameKw || []).map(normName) }));
+}
+
+// 副菜の調理スタイル。nameKw は料理名から判定する
+export const SIDE_STYLES = [
+  { name: '和え物・おひたし', nameKw: ['和え', 'おひたし', 'ナムル'] },
+  { name: '煮物・煮びたし', nameKw: ['煮物', '煮びたし', '煮'] },
+  { name: 'サラダ', nameKw: ['サラダ', 'スロー'] },
+  { name: '炒め物・きんぴら', nameKw: ['炒め', 'きんぴら', 'しりしり'] },
+  { name: 'マリネ・漬け・浸し', nameKw: ['マリネ', '漬け', '浸し', 'ピクルス'] },
+  { name: '卵焼き・卵料理', nameKw: ['卵焼き', 'オムレツ', 'キッシュ'] },
+];
+
+export function styleOptions() {
+  return SIDE_STYLES.map((s) => ({ key: `style:${s.name}`, name: s.name, nameKw: s.nameKw.map(normName) }));
+}

@@ -1,6 +1,6 @@
 // 献立の組み立て・分量計算・買い物リスト集計（DOM に依存しない純粋ロジック）
 import { addDays, normName, namesMatch, fmtNum, shuffle } from './util.js';
-import { proteinOptions, BUILTIN_RECIPES, CATEGORIES } from './data.js';
+import { proteinOptions, vegOptions, flavorOptions, styleOptions, BUILTIN_RECIPES, CATEGORIES } from './data.js';
 
 // ---------- 人数・分量 ----------
 
@@ -200,8 +200,47 @@ export function canFreeze(r) {
   return /冷凍/.test(r?.storage?.method || '');
 }
 
+// レシピに含まれる野菜（設定画面の野菜リストに載っているもの）
+export function recipeVegKeys(r) {
+  const names = (r?.ingredients || []).map((i) => normName(i.name));
+  return vegOptions().filter((v) => names.some((n) => n.includes(normName(v.name)))).map((v) => v.key);
+}
+
+// レシピの味付け。AI が付けたものがあればそれを使い、なければ材料と料理名から推定する
+export function recipeFlavorKeys(r) {
+  const opts = flavorOptions();
+  if (Array.isArray(r?.flavors) && r.flavors.length) {
+    return opts.filter((f) => r.flavors.includes(f.name)).map((f) => f.key);
+  }
+  const names = (r?.ingredients || []).map((i) => normName(i.name));
+  const title = normName(r?.name);
+  return opts
+    .filter((f) => f.kw.some((k) => names.some((n) => n.includes(k))) || f.nameKw.some((k) => title.includes(k)))
+    .map((f) => f.key);
+}
+
+// 副菜の調理スタイル（AI が付けたものを優先し、なければ料理名から推定）
+export function recipeStyleKeys(r) {
+  if (r?.type !== 'side') return [];
+  const opts = styleOptions();
+  if (r.sideStyle) return opts.filter((o) => o.name === r.sideStyle).map((o) => o.key);
+  const title = normName(r.name);
+  const hit = opts.find((o) => o.nameKw.some((k) => title.includes(k)));
+  return hit ? [hit.key] : [];
+}
+
+function prefKeys(r) {
+  return [r?.protein?.key, ...recipeVegKeys(r), ...recipeFlavorKeys(r), ...recipeStyleKeys(r)].filter(Boolean);
+}
+
+// 主食材・野菜・味付けのどれかが 👎 なら除外
 export function isDisliked(r, prefs = {}) {
-  return !!(r?.protein?.key && prefs[r.protein.key] === 'dislike');
+  return prefKeys(r).some((k) => prefs[k] === 'dislike');
+}
+
+// 👍 の数（再利用や内蔵レシピを選ぶときの優先度）
+export function likeCount(r, prefs = {}) {
+  return prefKeys(r).filter((k) => prefs[k] === 'like').length;
 }
 
 export function planRecipeIds(plan) {
@@ -271,7 +310,7 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
       const scored = cands
         .filter((r) => !r.weekly)
         .filter((r) => settings.mode === 'reuse' || !prevIds.has(r.id))
-        .map((r) => ({ r, s: (r.favorite ? 2 : 0) - (prevIds.has(r.id) ? 3 : 0) + rng() }))
+        .map((r) => ({ r, s: (r.favorite ? 2 : 0) + likeCount(r, prefs) * 0.5 - (prevIds.has(r.id) ? 3 : 0) + rng() }))
         .sort((a, b) => b.s - a.s)
         .slice(0, k);
       for (const { r } of scored) {
@@ -311,9 +350,20 @@ export function buildWeek({ weekStart, settings = {}, members = [], recipes = []
 
 // ---------- 内蔵レシピからの選択（APIキーなし・エラー時） ----------
 
-export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, builtins = BUILTIN_RECIPES) {
+export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.random, prefs = {}, builtins = BUILTIN_RECIPES) {
   const all = builtins.filter((b) => b.type === type);
-  const list = all.filter((b) => !usedNames.has(normName(b.name)));
+  let list = all.filter((b) => !usedNames.has(normName(b.name)));
+  const ok = list.filter((b) => !isDisliked(b, prefs));
+  if (ok.length) list = ok;
+  const weighted = (c) => {
+    const ws = c.map((b) => 1 + 2 * likeCount(b, prefs));
+    let x = rng() * ws.reduce((a, w) => a + w, 0);
+    for (let i = 0; i < c.length; i++) {
+      x -= ws[i];
+      if (x < 0) return c[i];
+    }
+    return c[c.length - 1];
+  };
   const tiers = [];
   if (type === 'main' && target) {
     const t = target.key.split(':')[1];
@@ -324,7 +374,7 @@ export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.rand
   tiers.push(() => true);
   for (const tier of tiers) {
     const c = list.filter(tier);
-    if (c.length) return c[Math.floor(rng() * c.length)];
+    if (c.length) return weighted(c);
   }
   return all.length ? all[Math.floor(rng() * all.length)] : null;
 }

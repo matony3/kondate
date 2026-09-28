@@ -381,3 +381,8 @@ input.num { width: 84px; flex: none; }
 @media (max-width: 380px) {
   .grid3 { grid-template-columns: 1fr 1fr; }
 }
+
+.chips.taste { margin-top: 6px; }
+.tag { font-size: .72rem; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.tag.like { background: var(--side-bg); color: var(--side); font-weight: 700; }
+.tag.dislike { background: var(--warn-bg); color: var(--warn); }

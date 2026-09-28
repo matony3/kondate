@@ -1,5 +1,5 @@
 // Gemini に渡すプロンプトと応答スキーマ
-import { CATEGORIES, MEMBER_KINDS, proteinOptions } from './data.js';
+import { CATEGORIES, MEMBER_KINDS, FLAVORS, SIDE_STYLES, proteinOptions, vegOptions, flavorOptions, styleOptions } from './data.js';
 import { mdw } from './util.js';
 import { dayServings } from './planner.js';
 
@@ -28,10 +28,12 @@ const RECIPE = {
     reheat: { type: 'STRING', description: '食べるときの温め方・解凍方法' },
     kidsVersion: { type: 'STRING', description: '未就学児向けの取り分け・アレンジ方法' },
     point: { type: 'STRING', description: '作り置きのコツ' },
+    flavors: { type: 'ARRAY', items: { type: 'STRING', enum: FLAVORS.map((f) => f.name) }, description: '主な味付け（1〜2個）' },
+    sideStyle: { type: 'STRING', enum: [...SIDE_STYLES.map((x) => x.name), 'その他'], description: '副菜の調理スタイル。主菜は「その他」' },
     proteinKind: { type: 'STRING', enum: ['meat', 'fish', 'other'] },
     proteinLabel: { type: 'STRING', description: '主な肉・魚（例: 鶏もも肉、サバ）。副菜は空文字' },
   },
-  required: ['slot', 'name', 'timeMinutes', 'ingredients', 'steps', 'storageMethod', 'fridgeDays', 'freezerDays', 'reheat', 'kidsVersion', 'point', 'proteinKind', 'proteinLabel'],
+  required: ['slot', 'name', 'timeMinutes', 'ingredients', 'steps', 'storageMethod', 'fridgeDays', 'freezerDays', 'reheat', 'kidsVersion', 'point', 'flavors', 'sideStyle', 'proteinKind', 'proteinLabel'],
 };
 
 export const WEEK_SCHEMA = {
@@ -73,9 +75,17 @@ function familyText(members) {
 }
 
 function prefText(prefs) {
-  const opts = proteinOptions();
-  const pick = (v) => opts.filter((o) => prefs[o.key] === v).map((o) => o.label).join('、') || 'なし';
-  return { like: pick('like'), dislike: pick('dislike') };
+  const pick = (opts, v, label = (o) => o.name) => opts.filter((o) => prefs[o.key] === v).map(label).join('、') || 'なし';
+  const p = proteinOptions();
+  const veg = vegOptions();
+  const fl = flavorOptions();
+  const st = styleOptions();
+  return {
+    like: pick(p, 'like', (o) => o.label), dislike: pick(p, 'dislike', (o) => o.label),
+    vegLike: pick(veg, 'like'), vegDislike: pick(veg, 'dislike'),
+    flavorLike: pick(fl, 'like'), flavorDislike: pick(fl, 'dislike'),
+    styleLike: pick(st, 'like'), styleDislike: pick(st, 'dislike'),
+  };
 }
 
 function pantryText(pantry) {
@@ -96,6 +106,12 @@ function commonContext({ settings, members, prefs, pantry }) {
 - 分量はすべて「大人4人分」で書く（アプリ側で人数に応じて自動で増減する）
 ${hasChild ? '- 未就学児（3〜6歳）がいるので、kidsVersion に「どのタイミングで取り分けるか」「味付け・切り方・食感の調整」を具体的に書く（辛味・わさび・こしょう・生もの・丸のままの豆類などは子ども分から除く）\n' : '- kidsVersion には子どもや味の好みに合わせたアレンジを一言書く\n'}- 好きな主食材: ${pr.like}
 - 避けたい主食材: ${pr.dislike}
+- 好きな野菜: ${pr.vegLike}（副菜・付け合わせで積極的に使う）
+- 使わない野菜: ${pr.vegDislike}（主菜・副菜とも材料に入れない）
+- 好きな味付け: ${pr.flavorLike}（多めに取り入れる。ただし毎日同じにはしない）
+- 使わない味付け: ${pr.flavorDislike}（どの料理にも使わない）
+- 好きな副菜のタイプ: ${pr.styleLike}
+- 避けたい副菜のタイプ: ${pr.styleDislike}
 - 家にある食材（優先して使い切りたい）: ${pa.stock}
   ※在庫の食材を使うときは、材料名を在庫と同じ表記にする
 - 常備している調味料など: ${pa.staple}

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase } from '../js/planner.js';
+import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
+import { weekPrompt } from '../js/prompts.js';
 import { namesMatch, defaultWeekStart, normName } from '../js/util.js';
 import { BUILTIN_RECIPES, proteinOptions, guessCategory } from '../js/data.js';
 
@@ -161,4 +162,46 @@ test('内蔵レシピのデータ整合性', () => {
     assert.ok(r.bid && r.name && r.ingredients.length && r.steps.length, r.name);
     if (r.type === 'main') assert.ok(keys.has(r.protein.key), `${r.name}: ${r.protein.key}`);
   }
+});
+
+const byName = (n) => BUILTIN_RECIPES.find((r) => r.name === n);
+
+test('レシピの野菜・味付け・副菜タイプを判定する', () => {
+  assert.ok(recipeVegKeys(byName('肉じゃが')).includes('veg:じゃがいも'));
+  assert.ok(recipeVegKeys(byName('サバの味噌煮')).length === 0);
+  assert.ok(recipeFlavorKeys(byName('サバの味噌煮')).includes('flavor:味噌'));
+  assert.ok(recipeFlavorKeys(byName('鶏もも肉の照り焼き')).includes('flavor:甘辛・照り焼き'));
+  assert.ok(recipeFlavorKeys(byName('ポテトサラダ')).includes('flavor:マヨネーズ'));
+  assert.deepEqual(recipeStyleKeys(byName('ほうれん草のごま和え')), ['style:和え物・おひたし']);
+  assert.deepEqual(recipeStyleKeys(byName('鶏もも肉の照り焼き')), []);
+  // AI が付けた味付けを優先
+  assert.deepEqual(recipeFlavorKeys({ name: 'x', flavors: ['カレー'], ingredients: [{ name: '味噌' }] }), ['flavor:カレー']);
+});
+
+test('苦手な野菜・味付けを含むレシピは除外、好みは加点', () => {
+  assert.ok(isDisliked(byName('肉じゃが'), { 'veg:じゃがいも': 'dislike' }));
+  assert.ok(isDisliked(byName('サバの味噌煮'), { 'flavor:味噌': 'dislike' }));
+  assert.ok(!isDisliked(byName('サバの味噌煮'), { 'veg:じゃがいも': 'dislike' }));
+  assert.equal(likeCount(byName('ポテトサラダ'), { 'veg:じゃがいも': 'like', 'flavor:マヨネーズ': 'like', 'style:サラダ': 'like' }), 3);
+});
+
+test('内蔵レシピは苦手な野菜・味付けを避ける', () => {
+  const prefs = { 'veg:にんじん': 'dislike', 'flavor:マヨネーズ': 'dislike' };
+  for (let s = 1; s < 40; s++) {
+    const b = pickBuiltin('side', null, new Set(), seeded(s), prefs);
+    assert.ok(!isDisliked(b, prefs), b.name);
+  }
+});
+
+test('プロンプトに野菜・味付けの好みが入る', () => {
+  const text = weekPrompt({
+    settings: {}, members, pantry: [], days: [{ date: '2026-09-28', absent: [] }],
+    prefs: { 'veg:ブロッコリー': 'like', 'veg:ピーマン': 'dislike', 'flavor:ピリ辛': 'dislike', 'flavor:味噌': 'like', 'style:サラダ': 'like' },
+    mainRequests: [], sideRequests: [{ day: 0, idx: 0, storage: '冷蔵' }],
+  });
+  assert.match(text, /好きな野菜: ブロッコリー/);
+  assert.match(text, /使わない野菜: ピーマン/);
+  assert.match(text, /好きな味付け: 味噌/);
+  assert.match(text, /使わない味付け: ピリ辛/);
+  assert.match(text, /好きな副菜のタイプ: サラダ/);
 });
