@@ -6,6 +6,8 @@ import {
   simplePrep, recipeUsage, planRecipeIds, canFreeze, recipeFlavorKeys, recipeStyleKeys,
 } from './planner.js';
 import * as gemini from './gemini.js';
+import { loadFirebaseConfig, parseFirebaseConfig, saveFirebaseConfig, connect } from './cloud.js';
+import { SyncEngine, getHouseholdId, createHousehold, createInvite, joinHousehold, leaveHousehold } from './sync.js';
 import * as P from './prompts.js';
 
 let S = loadState();
@@ -37,15 +39,180 @@ const hasKey = () => !!S.settings.apiKey?.trim();
 // ---------- 保存・描画 ----------
 
 // どの献立にも使われていない AI／内蔵レシピはレシピ帳から自動で片付ける
+// 作ったばかりのレシピは残す（同期中に家族の献立より先にレシピだけ届いた場合に消さないため）
 function gcRecipes() {
   const used = new Set(Object.values(S.plans).flatMap(planRecipeIds));
-  S.recipes = S.recipes.filter((r) => used.has(r.id) || r.favorite || r.weekly || r.excluded || r.keep || r.source === 'manual');
+  const fresh = Date.now() - 10 * 60 * 1000;
+  S.recipes = S.recipes.filter((r) => used.has(r.id) || r.favorite || r.weekly || r.excluded || r.keep || r.source === 'manual' || (r.createdAt || 0) > fresh);
 }
 
 function commit() {
   gcRecipes();
   if (!saveState(S)) toast('保存に失敗しました（ブラウザの保存領域を確認してください）', 'error');
+  cloud.engine?.push();
   render();
+}
+
+// ---------- 家族で同期（Googleログイン＋Firebase） ----------
+
+const cloud = {
+  config: null, // Firebase の設定
+  conn: null, // connect() の戻り値
+  user: null, // ログイン中の Google ユーザー
+  hid: null, // 家族グループのID
+  household: null, // 家族グループの情報（メンバー・招待コード）
+  engine: null,
+  status: 'off', // off | loading | signed-out | no-household | syncing | synced | error
+  error: '',
+  unsubHousehold: null,
+};
+
+function setCloudStatus(status, err) {
+  cloud.status = status;
+  cloud.error = err ? String(err.message || err) : '';
+  renderSyncBadge();
+}
+
+function renderSyncBadge() {
+  const el = $('#syncBadge');
+  if (!el) return;
+  const map = {
+    synced: ['☁️', '同期済み'], syncing: ['🔄', '同期中'], error: ['⚠️', '同期エラー'],
+    'signed-out': ['☁️', '未ログイン'], 'no-household': ['☁️', '家族グループ未設定'], loading: ['…', '接続中'],
+  };
+  const [icon, label] = map[cloud.status] || ['', ''];
+  el.innerHTML = icon ? `<button class="sync-badge ${cloud.status}" data-action="tab" data-tab="settings" title="${label}">${icon}<span>${label}</span></button>` : '';
+}
+
+// 入力中に相手の変更で画面が書き換わらないよう、入力欄から離れてから描画する
+let renderDeferred = false;
+function scheduleRender() {
+  const a = document.activeElement;
+  if (a && a.matches?.('input:not([type=checkbox]):not([type=radio]), textarea, select') && a.closest('#view, #modal')) {
+    renderDeferred = true;
+    return;
+  }
+  render();
+}
+document.addEventListener('focusout', () => {
+  if (!renderDeferred) return;
+  setTimeout(() => {
+    if (renderDeferred) { renderDeferred = false; scheduleRender(); }
+  }, 0);
+});
+
+async function attachHousehold(hid, { upload = false } = {}) {
+  cloud.engine?.stop();
+  cloud.unsubHousehold?.();
+  cloud.hid = hid;
+  const engine = new SyncEngine({
+    adapter: cloud.conn.adapter,
+    hid,
+    getState: () => S,
+    onRemote: () => { saveState(S); scheduleRender(); },
+    onStatus: (st, err) => setCloudStatus(st === 'error' ? 'error' : st, err),
+  });
+  setCloudStatus('syncing');
+  if (upload) {
+    engine.push();
+  } else {
+    const hasData = await engine.pull();
+    if (!hasData) engine.push(); // 家族グループはあるがデータがまだない
+    saveState(S);
+  }
+  engine.subscribe();
+  cloud.engine = engine;
+  cloud.unsubHousehold = cloud.conn.adapter.onDoc(`households/${hid}`, ({ data }) => {
+    cloud.household = data;
+    if (ui.tab === 'settings') scheduleRender();
+  });
+  if (!engine.pending) setCloudStatus('synced');
+  render();
+}
+
+async function initCloud() {
+  cloud.config = await loadFirebaseConfig();
+  if (!cloud.config) return;
+  setCloudStatus('loading');
+  try {
+    cloud.conn = await connect(cloud.config);
+  } catch (err) {
+    setCloudStatus('error', `同期機能を読み込めませんでした（${err.message}）`);
+    return;
+  }
+  cloud.conn.onAuth(async (user) => {
+    cloud.user = user;
+    if (!user) {
+      cloud.engine?.stop();
+      cloud.unsubHousehold?.();
+      Object.assign(cloud, { engine: null, hid: null, household: null });
+      setCloudStatus('signed-out');
+      render();
+      return;
+    }
+    try {
+      const hid = await getHouseholdId(cloud.conn.adapter, user.uid);
+      if (hid) await attachHousehold(hid);
+      else setCloudStatus('no-household');
+    } catch (err) {
+      setCloudStatus('error', err);
+    }
+    render();
+  });
+}
+
+function syncSection() {
+  if (!cloud.config) {
+    return `<section class="card">
+      <h2>☁️ 家族で同期（Googleログイン）</h2>
+      <p class="muted small">Googleアカウントでログインすると、夫婦のスマホで献立・買い物リスト・在庫・レシピ帳を共有できます。最初に Firebase（Googleの無料サービス）の準備が必要です（README の手順を参照）。</p>
+      <label class="field"><span class="label">Firebase の設定（firebaseConfig）を貼り付け</span>
+        <textarea id="fbConfig" rows="5" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;AIza...&quot;,&#10;  authDomain: &quot;...firebaseapp.com&quot;,&#10;  projectId: &quot;...&quot;,&#10;  ...&#10;};"></textarea></label>
+      <button class="btn" data-action="fb-config-save">設定を保存して再読み込み</button>
+    </section>`;
+  }
+  const head = '<h2>☁️ 家族で同期（Googleログイン）</h2>';
+  const err = cloud.error ? `<p class="note warn">⚠ ${esc(cloud.error)}</p>` : '';
+  if (cloud.status === 'loading') return `<section class="card">${head}<p class="muted">接続中…</p></section>`;
+  if (!cloud.conn) return `<section class="card">${head}${err}<button class="btn" data-action="fb-config-clear">Firebase の設定をやり直す</button></section>`;
+  if (!cloud.user) {
+    return `<section class="card">${head}${err}
+      <p class="muted small">ログインすると、この端末のデータを家族と共有できます。</p>
+      <button class="btn primary block" data-action="cloud-signin">Googleでログイン</button></section>`;
+  }
+  const who = `<p class="small">ログイン中：<b>${esc(cloud.user.displayName || '')}</b> <span class="muted">${esc(cloud.user.email || '')}</span></p>`;
+  if (!cloud.hid) {
+    return `<section class="card">${head}${who}${err}
+      <div class="choice">
+        <h3>はじめて使う</h3>
+        <p class="muted small">家族グループを作り、この端末の献立・レシピ・在庫をアップロードします。</p>
+        <button class="btn primary" data-action="cloud-create">家族グループを作る</button>
+      </div>
+      <div class="choice">
+        <h3>家族が先に始めている</h3>
+        <p class="muted small">家族の端末の「招待コード」を入力して参加します。この端末のデータは家族のデータに置き換わります。</p>
+        <div class="inline-form"><input id="joinCode" placeholder="招待コード（6文字）" autocomplete="off" autocapitalize="characters"><button class="btn" data-action="cloud-join">参加</button></div>
+      </div>
+      <button class="linkish" data-action="cloud-signout">ログアウト</button></section>`;
+  }
+  const h = cloud.household || {};
+  const members = Object.values(h.memberInfo || {});
+  const statusText = { synced: '✅ 同期済み', syncing: '🔄 同期中…', error: '⚠ 同期エラー' }[cloud.status] || '';
+  return `<section class="card">${head}${who}${err}
+    <p class="small">${statusText}</p>
+    <div class="field"><div class="label">家族グループのメンバー（${members.length}人）</div>
+      <ul class="plain">${members.map((m) => `<li>👤 ${esc(m.name || m.email)} <span class="muted small">${esc(m.email || '')}</span></li>`).join('')}</ul></div>
+    <div class="field"><div class="label">家族を招待する</div>
+      ${h.invite ? `<div class="invite"><span class="code">${esc(h.invite)}</span><button class="btn small" data-action="cloud-copy-code">コピー</button></div>
+        <p class="muted small">家族の端末でこのアプリを開き、Googleでログイン →「招待コード」に入力してもらってください。</p>` : ''}
+      <button class="btn small" data-action="cloud-invite">${h.invite ? '新しいコードを発行' : '招待コードを発行'}</button>
+    </div>
+    <label class="check"><input type="checkbox" data-bind="settings.shareApiKey" ${S.settings.shareApiKey ? 'checked' : ''}> Gemini のAPIキーも家族と共有する</label>
+    <p class="muted small">オンにすると、家族の端末でもAPIキーの入力なしでAIの提案が使えます（家族グループのメンバーだけが読めます）。</p>
+    <div class="row gap wrap">
+      <button class="btn ghost" data-action="cloud-signout">ログアウト</button>
+      <button class="linkish danger" data-action="cloud-leave">家族グループから抜ける</button>
+    </div></section>`;
 }
 
 function toast(msg, kind = '') {
@@ -417,6 +584,8 @@ function viewSettings() {
       <label class="field"><span class="label">アレルギー・苦手な食材・その他の要望</span>
         <textarea rows="3" data-bind="settings.notes" placeholder="例：娘はきのこが苦手／えびアレルギーなし／平日は20時に食べる">${esc(s.notes)}</textarea></label>
     </section>
+
+    ${syncSection()}
 
     <section class="card">
       <h2>💾 データ</h2>
@@ -1104,9 +1273,91 @@ const actions = {
     delete S.extras[ui.week];
     commit();
   },
+  'fb-config-save': () => {
+    const config = parseFirebaseConfig($('#fbConfig').value);
+    if (!config) { toast('設定を読み取れませんでした。Firebase コンソールの firebaseConfig をそのまま貼り付けてください', 'error'); return; }
+    saveFirebaseConfig(config);
+    location.reload();
+  },
+  'fb-config-clear': () => {
+    if (!confirm('この端末に保存した Firebase の設定を消して、やり直しますか？')) return;
+    saveFirebaseConfig(null);
+    location.reload();
+  },
+  'cloud-signin': async () => {
+    try {
+      await cloud.conn.signIn();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  },
+  'cloud-signout': async () => {
+    if (!confirm('ログアウトしますか？（この端末のデータはそのまま残ります）')) return;
+    await cloud.conn.signOut();
+    toast('ログアウトしました');
+  },
+  'cloud-create': async () => {
+    setBusy('家族グループを作っています…');
+    try {
+      const hid = await createHousehold(cloud.conn.adapter, cloud.user, uid);
+      await attachHousehold(hid, { upload: true });
+      await createInvite(cloud.conn.adapter, hid, cloud.user.uid);
+      toast('家族グループを作りました。招待コードを家族に伝えてください');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    setBusy('');
+    render();
+  },
+  'cloud-join': async () => {
+    const code = $('#joinCode').value.trim();
+    if (!code) { toast('招待コードを入力してください'); return; }
+    if (!confirm('家族グループに参加します。この端末の献立・レシピ・在庫は家族のデータに置き換わります。よろしいですか？')) return;
+    setBusy('参加しています…');
+    try {
+      const hid = await joinHousehold(cloud.conn.adapter, code, cloud.user);
+      await attachHousehold(hid);
+      toast('家族グループに参加しました');
+    } catch (err) {
+      toast(err.code === 'permission-denied' ? '参加できませんでした。招待コードを確認してください' : err.message, 'error');
+    }
+    setBusy('');
+    render();
+  },
+  'cloud-invite': async () => {
+    try {
+      await createInvite(cloud.conn.adapter, cloud.hid, cloud.user.uid);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  },
+  'cloud-copy-code': async () => {
+    try {
+      await navigator.clipboard.writeText(cloud.household?.invite || '');
+      toast('招待コードをコピーしました');
+    } catch {
+      toast('コピーできませんでした', 'error');
+    }
+  },
+  'cloud-leave': async () => {
+    if (!confirm('家族グループから抜けますか？この端末のデータは残りますが、以後は同期されません。')) return;
+    try {
+      cloud.engine?.stop();
+      cloud.unsubHousehold?.();
+      await leaveHousehold(cloud.conn.adapter, cloud.hid, cloud.user.uid);
+      Object.assign(cloud, { engine: null, hid: null, household: null });
+      setCloudStatus('no-household');
+      render();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  },
   reset: () => {
-    if (!confirm('献立・レシピ帳・在庫・設定をすべて削除します。よろしいですか？')) return;
+    const shared = cloud.hid ? '\n\n⚠ 家族グループで同期中のため、家族の端末のデータも消えます。' : '';
+    if (!confirm(`献立・レシピ帳・在庫・設定をすべて削除します。よろしいですか？${shared}`)) return;
+    const key = S.settings.apiKey;
     S = migrate(null);
+    S.settings.apiKey = key;
     commit();
   },
 };
@@ -1205,6 +1456,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 render();
+initCloud();
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => { /* オフライン対応なしで続行 */ });

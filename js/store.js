@@ -12,6 +12,7 @@ export function defaultState() {
       sidesPerDay: 1,
       fridgeDays: 3,
       notes: '',
+      shareApiKey: false,
     },
     members: [
       { id: 'm-papa', name: '夫', kind: 'adult', portion: 1, default: true },
