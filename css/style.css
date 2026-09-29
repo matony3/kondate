@@ -409,3 +409,4 @@ input.num { width: 84px; flex: none; }
 .plain li { padding: 3px 0; }
 .invite { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
 .invite .code { font-family: ui-monospace, Menlo, monospace; font-size: 1.5rem; font-weight: 800; letter-spacing: .18em; padding: 4px 12px; border-radius: 10px; background: var(--accent-soft); }
+.flag-btn.copy { color: var(--text); border-color: var(--accent); }

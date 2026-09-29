@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, storageFor, gramHint, ingGrams, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
+import { aggregateShopping, buildWeek, dayServings, scaleQty, pickProteinTargets, pickBuiltin, formatBase, storageFor, gramHint, recipeToText, ingGrams, isDisliked, likeCount, recipeVegKeys, recipeFlavorKeys, recipeStyleKeys } from '../js/planner.js';
 import { weekPrompt, detailPrompt } from '../js/prompts.js';
 import { namesMatch, defaultWeekStart, normName } from '../js/util.js';
 import { BUILTIN_RECIPES, proteinOptions, guessCategory } from '../js/data.js';
@@ -261,4 +261,19 @@ test('冷凍する日は冷凍できる内蔵レシピを選ぶ', () => {
       assert.match(b.storage.method, /冷凍/, b.name);
     }
   }
+});
+
+test('レシピを文章にする（人数に合わせた分量・重さ・切り方つき）', () => {
+  const r = { name: '肉じゃが', servings: 4, time: 35, storage: { fridgeDays: 3, freezerDays: 0, reheat: 'レンジで2分' }, kidsVersion: '小さく切る', point: '',
+    ingredients: [{ name: '牛こま切れ肉', amount: 300, unit: 'g' }, { name: 'じゃがいも', amount: 4, unit: '個', grams: 600, prep: '4等分' }, { name: '醤油', amount: 4, unit: '大さじ' }],
+    steps: ['切る', '煮る'] };
+  const t = recipeToText(r, 2, { label: '9/28(月)の主菜' });
+  assert.match(t, /^【肉じゃが】 9\/28\(月\)の主菜（2人分）/);
+  assert.match(t, /調理時間 約35分／冷蔵3日/);
+  assert.match(t, /・牛こま切れ肉 150g/);
+  assert.match(t, /・じゃがいも 2個（約300g） … 4等分/);
+  assert.match(t, /・醤油 大さじ2/);
+  assert.match(t, /1\. 切る\n2\. 煮る/);
+  assert.match(t, /■子ども向けアレンジ\n小さく切る/);
+  assert.doesNotMatch(t, /■コツ/);
 });

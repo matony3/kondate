@@ -422,6 +422,27 @@ export function pickBuiltin(type, target, usedNames = new Set(), rng = Math.rand
 
 // ---------- 作り置きの段取り（AIなし版） ----------
 
+// ---------- レシピを文章にする（コピー・共有用） ----------
+
+export function recipeToText(r, servings, { label = '' } = {}) {
+  const f = servings / (Number(r.servings) || 4);
+  const st = r.storage || {};
+  const lines = [`【${r.name}】${label ? ` ${label}` : ''}（${fmtNum(servings)}人分）`];
+  const meta = [r.time ? `調理時間 約${r.time}分` : '', st.fridgeDays ? `冷蔵${st.fridgeDays}日` : '', st.freezerDays ? `冷凍${st.freezerDays}日` : ''].filter(Boolean);
+  if (meta.length) lines.push(meta.join('／'));
+  lines.push('', '■材料');
+  for (const i of r.ingredients || []) {
+    const g = gramHint(i, f);
+    lines.push(`・${i.name} ${scaleQty(i.amount, i.unit, f)}${g ? `（${g}）` : ''}${i.prep ? ` … ${i.prep}` : ''}`);
+  }
+  lines.push('', '■作り方');
+  (r.steps || []).forEach((s, n) => lines.push(`${n + 1}. ${s}`));
+  if (st.reheat) lines.push('', '■保存と温め直し', st.reheat);
+  if (r.kidsVersion) lines.push('', '■子ども向けアレンジ', r.kidsVersion);
+  if (r.point) lines.push('', '■コツ', r.point);
+  return lines.join('\n');
+}
+
 export function simplePrep(dishes) {
   const group = (d) => {
     if (/煮|トマト|シチュー|カレー/.test(d.name)) return 0;
