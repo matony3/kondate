@@ -2,7 +2,7 @@ import { esc, uid, addDays, defaultWeekStart, md, dow, mdw, weekOffset, normName
 import { loadState, saveState, migrate } from './store.js';
 import { PROTEINS, VEGETABLES, CATEGORIES, UNITS, SEASONING_PRESETS, BUILTIN_RECIPES, MEMBER_KINDS, proteinOptions, vegOptions, flavorOptions, styleOptions, findProtein, guessCategory } from './data.js';
 import {
-  dayServings, buildWeek, aggregateShopping, scaleQty, gramHint, pickBuiltin, pickProteinTargets,
+  dayServings, buildWeek, aggregateShopping, scaleQty, gramHint, recipeToText, pickBuiltin, pickProteinTargets,
   simplePrep, recipeUsage, planRecipeIds, canFreeze, recipeFlavorKeys, recipeStyleKeys,
 } from './planner.js';
 import * as gemini from './gemini.js';
@@ -400,6 +400,7 @@ function viewPlan() {
       <div class="week-grid" style="--cols:${Math.min(7, Math.max(3, plan.days.length))}">${plan.days.map(dayCard).join('')}</div>
       <p class="muted small hint">料理をタップするとレシピ・分量・別案。名前のボタンでその日に食べる人を切り替えると分量と買い物リストが変わります。</p>
       <button class="btn primary block" data-action="tab" data-tab="shop">🛒 買い物リストを見る</button>
+      <button class="btn ghost block" data-action="week-copy">📋 この週のレシピをまとめてコピー</button>
       ${prepSection(plan)}`;
   }
   return `${weekNav()}${genPanel(plan)}${body}`;
@@ -644,6 +645,7 @@ function recipeModal(m) {
       <button class="flag-btn ${r.favorite ? 'on' : ''}" data-action="recipe-flag" data-flag="favorite" data-id="${r.id}">★ お気に入り</button>
       <button class="flag-btn ${r.weekly ? 'on' : ''}" data-action="recipe-flag" data-flag="weekly" data-id="${r.id}">🔁 毎週入れる</button>
       <button class="flag-btn ${r.excluded ? 'on danger' : ''}" data-action="recipe-flag" data-flag="excluded" data-id="${r.id}">🚫 今後入れない</button>
+      <button class="flag-btn copy" data-action="recipe-copy" data-id="${r.id}">📋 コピー</button>
     </div>
     ${warn ? `<p class="note warn">⚠ ${warn}です。保存方法の切り替えか、別の案をおすすめします。</p>` : ''}
     <section>
@@ -960,6 +962,30 @@ function parseIngredientLine(line) {
   return { name, amount, unit, category: guessCategory(name) };
 }
 
+// クリップボードにコピー（使えない環境では共有メニュー、最後に選択コピーで代用）
+async function copyText(text, message = 'コピーしました。LINEなどに貼り付けできます') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(message);
+    return;
+  } catch { /* 次の方法へ */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    if (ok) { toast(message); return; }
+  } catch { /* 次の方法へ */ }
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; } catch { /* キャンセル */ }
+  }
+  toast('コピーできませんでした', 'error');
+}
+
 function download(filename, text) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
@@ -1104,12 +1130,28 @@ const actions = {
     }
     const ex = (S.extras[ui.week] || []).filter((x) => !x.done);
     if (ex.length) lines.push('【その他】', ...ex.map((x) => `・${x.name}`));
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      toast('コピーしました。LINEなどに貼り付けできます');
-    } catch {
-      toast('コピーできませんでした', 'error');
+    await copyText(lines.join('\n'));
+  },
+  'recipe-copy': async (el) => {
+    const r = getRecipe(el.dataset.id);
+    const m = ui.modal;
+    const day = m?.ctx ? currentPlan()?.days[m.ctx.day] : null;
+    const label = day ? `${mdw(day.date)}の${m.ctx.slot === 'main' ? '主菜' : '副菜'}` : '';
+    await copyText(recipeToText(r, m?.servings || Number(r.servings) || 4, { label }), 'レシピをコピーしました。LINEやメモに貼り付けできます');
+  },
+  'week-copy': async () => {
+    const plan = currentPlan();
+    const rm = recipeMap();
+    const parts = [`🍱 ${mdw(ui.week)}〜の献立`];
+    for (const d of plan.days) {
+      const servings = dayServings(S.members, d.absent);
+      if (servings <= 0) continue;
+      [d.mainId, ...d.sideIds].forEach((id, j) => {
+        const r = rm[id];
+        if (r) parts.push(recipeToText(r, servings, { label: `${mdw(d.date)}の${j === 0 ? '主菜' : '副菜'}` }));
+      });
     }
+    await copyText(parts.join('\n\n────────\n\n'), `${parts.length - 1}品のレシピをコピーしました`);
   },
   'toggle-covered': () => { ui.showCovered = !ui.showCovered; render(); },
   'extra-add': () => {
