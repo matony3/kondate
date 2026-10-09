@@ -1,4 +1,9 @@
-# 🍱 週末作り置き献立
+# 🍱 週末作り置き献立（移転しました）
+
+> **このアプリは [stock.yurukichi.com/meal/](https://stock.yurukichi.com/meal/) に移転し、在庫アプリ（[home-stock-manager](https://github.com/matony3/home-stock-manager)）の一部になりました。**
+> 今後の開発は home-stock-manager の `meal/` で行います。
+> GitHub Pages（`matony3.github.io/kondate/`）は移動用のページです。端末にデータがあれば「データを持って新しい場所へ移動」で引き継げます（`#import=`）。以前の画面は `legacy.html` に残しています。
+
 
 共働き家庭向けに、**週末にまとめて作る平日（月〜金）の夕食**の献立を提案し、買い物リストまで作るスマホ向け Web アプリです。
 レシピ提案には Google AI Studio の **Gemini API** を使います（APIキーがなくても内蔵レシピで動きます）。
