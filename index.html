@@ -34,7 +34,7 @@
       <p class="muted">在庫アプリと一緒に使えるようになりました。ホーム画面に追加している場合は、新しい場所で追加し直してください。</p>
 
       <div id="withData" hidden>
-        <p><b>この端末に献立のデータがあります。</b>（レシピ <span id="recipeCount">0</span>件・献立 <span id="planCount">0</span>週分）</p>
+        <p><b>この端末に献立のデータがあります。</b>（レシピ <span id="recipeCount">0</span>件・献立 <span id="planCount">0</span>週分・家族や好みなどの設定）</p>
         <button class="btn primary" id="moveWithData" type="button">データを持って新しい場所へ移動</button>
         <button class="btn" id="downloadBackup" type="button">バックアップを書き出す（JSON）</button>
         <a class="btn" id="moveOnly" href="https://stock.yurukichi.com/meal/">データを持たずに移動</a>
@@ -51,18 +51,22 @@
       // URL で渡せる長さの目安（超える場合はファイルで渡す）
       var MAX_HASH_CHARS = 60000;
 
-      // 古い献立アプリのキャッシュ（サービスワーカー）を片付ける
+      // 古い献立アプリのキャッシュ（サービスワーカー）を片付ける。
+      // matony3.github.io は他のプロジェクトとも共有しているので、このページのフォルダのものだけを外す
+      var APP_SCOPE = new URL('./', location.href).href;
       if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-        navigator.serviceWorker.getRegistrations().then(function (regs) { regs.forEach(function (r) { r.unregister(); }); }).catch(function () {});
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { if (r.scope === APP_SCOPE) r.unregister(); });
+        }).catch(function () {});
       }
 
       var data = null;
       try { data = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch (e) { data = null; }
       var recipes = data && Array.isArray(data.recipes) ? data.recipes.length : 0;
       var plans = data && data.plans ? Object.keys(data.plans).length : 0;
-      var pantry = data && Array.isArray(data.pantry) ? data.pantry.length : 0;
 
-      if (!recipes && !plans && !pantry) {
+      // 献立アプリは操作したときだけ保存するので、保存データがあれば（設定や好みだけでも）引き継ぎを案内する
+      if (!data || typeof data !== 'object') {
         document.getElementById('noData').hidden = false;
         location.replace(NEW_URL);
         return;
