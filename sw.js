@@ -1,30 +1,13 @@
-// オフラインでも開けるようにアプリ本体をキャッシュする（オンライン時は常に最新を取得）
-const CACHE = 'kondate-v7';
-const ASSETS = [
-  './', './index.html', './css/style.css', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png',
-  './js/app.js', './js/util.js', './js/data.js', './js/planner.js', './js/prompts.js', './js/gemini.js', './js/store.js', './js/sync.js', './js/cloud.js', './js/firebase-config.js',
-];
-
-self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
-  self.skipWaiting();
-});
+// 献立アプリは https://stock.yurukichi.com/meal/ に移転しました。
+// 以前のオフライン用キャッシュが古い画面を出し続けないよう、このサービスワーカーはキャッシュを消して自分の登録を外す。
+self.addEventListener('install', () => self.skipWaiting());
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))));
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  e.respondWith(
-    fetch(e.request)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
-        return res;
-      })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('./index.html'))),
-  );
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => caches.delete(k)));
+    await self.registration.unregister();
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const client of clients) client.navigate(client.url);
+  })());
 });
